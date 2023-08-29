@@ -166,69 +166,89 @@ type Raft struct {
 	logs LogStore
 
 	// Used to request the leader to make configuration changes.
+	// lyf: 用来修改配置信息；goland中常用的手法，提供channel进行操作；
+	// lyf: channel里传输的结构，有一个future后缀，想要阐述的思想是该操作在未来才会修改，而不是当下立马修改
 	configurationChangeCh chan *configurationChangeFuture
 
 	// Tracks the latest configuration and latest committed configuration from
 	// the log/snapshot.
+	// lyf: 跟踪最新和最新提交的配置信息？为什么需要跟踪？用来实时观测当前cluster的状态？
 	configurations configurations
 
 	// Holds a copy of the latest configuration which can be read independently
 	// of the main loop.
+	// lyf: 最新的配置信息缓存副本
 	latestConfiguration atomic.Value
 
 	// RPC chan comes from the transport layer
+	// lyf: 用来通知传输层的信息；相当于传输内容需要自己去解析，因此是自己实现了通信的逻辑，那rgpc的位置在哪儿？
 	rpcCh <-chan RPC
 
 	// Shutdown channel to exit, protected to prevent concurrent exits
+	// lyf: 用来标记和通知当前node shutdown
 	shutdown     bool
 	shutdownCh   chan struct{}
 	shutdownLock sync.Mutex
 
 	// snapshots is used to store and retrieve snapshots
+	// lyf: snapShot的存储层引擎
 	snapshots SnapshotStore
 
 	// userSnapshotCh is used for user-triggered snapshots
+	// lyf: 用户自行触发snapshot；算是提供的一个新功能？
 	userSnapshotCh chan *userSnapshotFuture
 
 	// userRestoreCh is used for user-triggered restores of external
 	// snapshots
+	// lyf: 用户自行触发，重新存储一个额外的快照
 	userRestoreCh chan *userRestoreFuture
 
 	// stable is a StableStore implementation for durable state
 	// It provides stable storage for many fields in raftState
+	// lyf: 状态持久化存储
 	stable StableStore
 
 	// The transport layer we use
+	// lyf: 传输层
 	trans Transport
 
 	// verifyCh is used to async send verify futures to the main thread
 	// to verify we are still the leader
+	// lyf: 异步的让我们知道，自己还是leader？这个设计来是做什么优化的？
 	verifyCh chan *verifyFuture
 
 	// configurationsCh is used to get the configuration data safely from
 	// outside of the main thread.
+	// lyf: configurations和configurationChange的区别，是前者存储整体状态，后者存储局部变化
 	configurationsCh chan *configurationsFuture
 
 	// bootstrapCh is used to attempt an initial bootstrap from outside of
 	// the main thread.
+	// lyf: 启动channel；用来试探是否还正常?
 	bootstrapCh chan *bootstrapFuture
 
 	// List of observers and the mutex that protects them. The observers list
 	// is indexed by an artificial ID which is used for deregistration.
+	// lyf: 观察者的信息
 	observersLock sync.RWMutex
 	observers     map[uint64]*Observer
 
 	// leadershipTransferCh is used to start a leadership transfer from outside of
 	// the main thread.
+	// lyf: 提供给外部操作者，用来改变当前的leader
 	leadershipTransferCh chan *leadershipTransferFuture
 
 	// leaderNotifyCh is used to tell leader that config has changed
+	// lyf: 通知leader配置发生变化
 	leaderNotifyCh chan struct{}
 
 	// followerNotifyCh is used to tell followers that config has changed
+	// lyf: 通知follower配置发生变化
 	followerNotifyCh chan struct{}
 
 	// mainThreadSaturation measures the saturation of the main raft goroutine.
+	// lyf: 测量main goroutine的运行时间
+	// lyf: 如何做到的？
 	mainThreadSaturation *saturationMetric
 }
 

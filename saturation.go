@@ -20,17 +20,21 @@ import (
 // Note: the caller must be single-threaded and saturationMetric is not safe for
 // concurrent use by multiple goroutines.
 type saturationMetric struct {
+	// lyf: 报导间隔
 	reportInterval time.Duration
 
 	// slept contains time for which the event processing loop was sleeping rather
 	// than working in the period since lastReport.
+	// lyf: 记录sleep的时间
 	slept time.Duration
 
 	// lost contains time that is considered lost due to incorrect use of
 	// saturationMetricBucket (e.g. calling sleeping() or working() multiple
 	// times in succession) in the period since lastReport.
+	// lyf: 错误的使用该类，造成的丢失时间
 	lost time.Duration
 
+	// lyf: 最后一次报导的时间，开始sleep和work的时间
 	lastReport, sleepBegan, workBegan time.Time
 
 	// These are overwritten in tests.
@@ -46,7 +50,8 @@ func newSaturationMetric(name []string, reportInterval time.Duration) *saturatio
 		reportInterval: reportInterval,
 		nowFn:          time.Now,
 		lastReport:     time.Now(),
-		reportFn:       func(sat float32) { metrics.AddSample(name, sat) },
+		// lyf: 用于上报指标的方法
+		reportFn: func(sat float32) { metrics.AddSample(name, sat) },
 	}
 	return m
 }
@@ -56,6 +61,7 @@ func newSaturationMetric(name []string, reportInterval time.Duration) *saturatio
 func (s *saturationMetric) sleeping() {
 	now := s.nowFn()
 
+	// lyf: 这个就是丢失时间；连续调用两次sleep
 	if !s.sleepBegan.IsZero() {
 		// sleeping called twice in succession. Count that time as lost rather than
 		// measuring nonsense.
@@ -69,6 +75,7 @@ func (s *saturationMetric) sleeping() {
 
 // working records the time at which the loop began working. It must always be
 // proceeded by a call to sleeping.
+// lyf: 计算sleep的时间；连续调用work/没有sleep都会记录为lost
 func (s *saturationMetric) working() {
 	now := s.nowFn()
 
@@ -92,6 +99,7 @@ func (s *saturationMetric) working() {
 }
 
 // report updates the gauge if reportInterval has passed since our last report.
+// lyf: 每过internal的时间，报导一次work ratio
 func (s *saturationMetric) report() {
 	now := s.nowFn()
 	timeSinceLastReport := now.Sub(s.lastReport)

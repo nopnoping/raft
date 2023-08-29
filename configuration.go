@@ -59,6 +59,7 @@ func (s nopConfigurationStore) StoreConfiguration(_ uint64, _ Configuration) {}
 type ServerID string
 
 // ServerAddress is a network address for a server that a transport can contact.
+// lyf: 类型为string，这样可以适配ipv4和ipv6
 type ServerAddress string
 
 // Server tracks the information about a single server in a configuration.

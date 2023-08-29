@@ -77,28 +77,34 @@ var (
 
 // Raft implements a Raft node.
 type Raft struct {
+	// lyf: 存储日志的偏移信息和当前的状态
 	raftState
 
 	// protocolVersion is used to inter-operate with Raft servers running
 	// different versions of the library. See comments in config.go for more
 	// details.
+	// lyf: 使用的库的版本，用在配置中，目前不知道具体用法
 	protocolVersion ProtocolVersion
 
 	// applyCh is used to async send logs to the main thread to
 	// be committed and applied to the FSM.
+	// lyf: 提供一个channel，来接收新的日志; 必然会有一个方法，用来接收外界的日志
 	applyCh chan *logFuture
 
 	// conf stores the current configuration to use. This is the most recent one
 	// provided. All reads of config values should use the config() helper method
 	// to read this safely.
+	// lyf: 存储配置信息; 使用atomic设计为原子的; 但是该类是任意的，一次提供了一个方法，来转换类为目标类
 	conf atomic.Value
 
 	// confReloadMu ensures that only one thread can reload config at once since
 	// we need to read-modify-write the atomic. It is NOT necessary to hold this
 	// for any other operation e.g. reading config using config().
+	// lyf: 获取配置信息时，加锁，防止条件竞争
 	confReloadMu sync.Mutex
 
 	// FSM is the client state machine to apply commands to
+	// lyf: 客户端的一个状态机，它存储了当前哪些日志已经成功commit了
 	fsm FSM
 
 	// fsmMutateCh is used to send state-changing updates to the FSM. This
@@ -108,44 +114,55 @@ type Raft struct {
 	// restores so that we finish applying any old log applies before we
 	// take a user snapshot on the leader, otherwise we might restore the
 	// snapshot and apply old logs to it that were in the pipe.
+	// lyf: fsm要apply时，使用该channel；为了解耦合？
 	fsmMutateCh chan interface{}
 
 	// fsmSnapshotCh is used to trigger a new snapshot being taken
+	// lyf: fsm在snapshot的时候，解耦合？
 	fsmSnapshotCh chan *reqSnapshotFuture
 
 	// lastContact is the last time we had contact from the
 	// leader node. This can be used to gauge staleness.
+	// lyf: 记录该node和leader最后一次联系的时间；可以很方便并且准确的利用到超时时间上
 	lastContact     time.Time
 	lastContactLock sync.RWMutex
 
 	// leaderAddr is the current cluster leader Address
+	// lyf: 记录leader的网络地址，以及集群中的id
 	leaderAddr ServerAddress
 	// LeaderID is the current cluster leader ID
 	leaderID   ServerID
 	leaderLock sync.RWMutex
 
 	// leaderCh is used to notify of leadership changes
+	// lyf: 该channel用来快速提醒node当前leader发生变化；算是一种优化？
 	leaderCh chan bool
 
 	// leaderState used only while state is leader
+	// lyf: leader状态下，记录和各个follower的同步状态
 	leaderState leaderState
 
 	// candidateFromLeadershipTransfer is used to indicate that this server became
 	// candidate because the leader tries to transfer leadership. This flag is
 	// used in RequestVoteRequest to express that a leadership transfer is going
 	// on.
+	// lyf: 让一个node快速成为leader？算是一种优化？为什么需要这个优化？
 	candidateFromLeadershipTransfer bool
 
 	// Stores our local server ID, used to avoid sending RPCs to ourself
+	// lyf: 自己在cluster中的id
 	localID ServerID
 
 	// Stores our local addr
+	// lyf: 自己的网络地址信息
 	localAddr ServerAddress
 
 	// Used for our logging
+	// lyf: 日志记录
 	logger hclog.Logger
 
 	// LogStore provides durable storage for logs
+	// lyf: 持久化存储
 	logs LogStore
 
 	// Used to request the leader to make configuration changes.

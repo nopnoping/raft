@@ -44,6 +44,7 @@ func (s RaftState) String() string {
 // raftState is used to maintain various state variables
 // and provides an interface to set/get the variables in a
 // thread safe manner.
+// lyf: 维护raft协议中用到的状态变量，并且提供了线程安全的读写
 type raftState struct {
 	// currentTerm commitIndex, lastApplied,  must be kept at the top of
 	// the struct so they're 64 bit aligned which is a requirement for
@@ -59,6 +60,8 @@ type raftState struct {
 	lastApplied uint64
 
 	// protects 4 next fields
+	// lyf: 为什么这几个变量要用锁，而上面3个不需要？
+	// lyf: 因为下面的几个数据，会存在同时读取多个数据的情况，而原子性只能保证一次读写是原子的
 	lastLock sync.Mutex
 
 	// Cache the latest snapshot index/term
@@ -70,6 +73,7 @@ type raftState struct {
 	lastLogTerm  uint64
 
 	// Tracks running goroutines
+	// lyf: 这个是用来追踪当前有多数线程正在运行；当要结束时，需要等待所有线程都结束
 	routinesGroup sync.WaitGroup
 
 	// The current state

@@ -38,13 +38,16 @@ type followerReplication struct {
 
 	// currentTerm is the term of this leader, to be included in AppendEntries
 	// requests.
+	// lyf: leader的term
 	currentTerm uint64
 
 	// nextIndex is the index of the next log entry to send to the follower,
 	// which may fall past the end of the log.
+	// lyf: 该follower下一个要同步的index
 	nextIndex uint64
 
 	// peer contains the network address and ID of the remote follower.
+	// lyf: follower的地址信息
 	peer Server
 	// peerLock protects 'peer'
 	peerLock sync.RWMutex
@@ -52,47 +55,57 @@ type followerReplication struct {
 	// commitment tracks the entries acknowledged by followers so that the
 	// leader's commit index can advance. It is updated on successful
 	// AppendEntries responses.
+	// lyf: 指针？这个应该就是LeaderState里的commitment；用来计算commit
 	commitment *commitment
 
 	// stopCh is notified/closed when this leader steps down or the follower is
 	// removed from the cluster. In the follower removed case, it carries a log
 	// index; replication should be attempted with a best effort up through that
 	// index, before exiting.
+	// lyf: 当leader不再是leader或则follower从集群中移除时，使用该channel来通知
 	stopCh chan uint64
 
 	// triggerCh is notified every time new entries are appended to the log.
+	// lyf: 当有新的日志需要同步时，就用这个触发
 	triggerCh chan struct{}
 
 	// triggerDeferErrorCh is used to provide a backchannel. By sending a
 	// deferErr, the sender can be notifed when the replication is done.
+	// lyf: 用来触发错误的？
 	triggerDeferErrorCh chan *deferError
 
 	// lastContact is updated to the current time whenever any response is
 	// received from the follower (successful or not). This is used to check
 	// whether the leader should step down (Raft.checkLeaderLease()).
+	// lyf: 最后一次联系时间；维护了这个数据，可以用来优化
 	lastContact time.Time
 	// lastContactLock protects 'lastContact'.
 	lastContactLock sync.RWMutex
 
 	// failures counts the number of failed RPCs since the last success, which is
 	// used to apply backoff.
+	// lyf: 失败的rpc次数
 	failures uint64
 
 	// notifyCh is notified to send out a heartbeat, which is used to check that
 	// this server is still leader.
+	// lyf: 通过这个channel来触发心跳
 	notifyCh chan struct{}
 	// notify is a map of futures to be resolved upon receipt of an
 	// acknowledgement, then cleared from this map.
+	// lyf: 这个是用来干啥的，没看懂
 	notify map[*verifyFuture]struct{}
 	// notifyLock protects 'notify'.
 	notifyLock sync.Mutex
 
 	// stepDown is used to indicate to the leader that we
 	// should step down based on information from a follower.
+	// lyf: 用来让leader退化的？
 	stepDown chan struct{}
 
 	// allowPipeline is used to determine when to pipeline the AppendEntries RPCs.
 	// It is private to this replication goroutine.
+	// lyf: 并发？
 	allowPipeline bool
 }
 

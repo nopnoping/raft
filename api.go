@@ -78,6 +78,7 @@ var (
 // Raft implements a Raft node.
 type Raft struct {
 	// lyf: 存储日志的偏移信息和当前的状态
+	// lyf: 启动的所有协程都要通过它来启动
 	raftState
 
 	// protocolVersion is used to inter-operate with Raft servers running

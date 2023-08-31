@@ -65,17 +65,22 @@ func (lt LogType) String() string {
 
 // Log entries are replicated to all members of the Raft cluster
 // and form the heart of the replicated state machine.
+// lyf: 日志结构体；
 type Log struct {
 	// Index holds the index of the log entry.
+	// lyf: 日志的偏移量
 	Index uint64
 
 	// Term holds the election term of the log entry.
+	// lyf: 日志提交所属的term
 	Term uint64
 
 	// Type holds the type of the log entry.
+	// lyf: 日志的类型；如是命令日志，还是nop日志
 	Type LogType
 
 	// Data holds the log entry's type-specific data.
+	// lyf: byte数据
 	Data []byte
 
 	// Extensions holds an opaque byte slice of information for middleware. It
@@ -91,6 +96,7 @@ type Log struct {
 	// upgraded, but a leader changeover during this process could lead to
 	// trouble, so gating extension behavior via some flag in the client
 	// program is also a good idea.
+	// lyf: 扩展？？有啥用
 	Extensions []byte
 
 	// AppendedAt stores the time the leader first appended this log to it's
@@ -104,6 +110,8 @@ type Log struct {
 	// In general too the leader is not required to persist the log before
 	// delivering to followers although the current implementation happens to do
 	// this.
+	// lyf: 该日志持久化的时间；不会用来同步；但是会优化follower的catch snapshot？
+	// lyf: optimization
 	AppendedAt time.Time
 }
 

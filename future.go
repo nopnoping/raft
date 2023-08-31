@@ -11,6 +11,7 @@ import (
 )
 
 // Future is used to represent an action that may occur in the future.
+// lyf: 实现了Java里用于并发的future？
 type Future interface {
 	// Error blocks until the future arrives and then returns the error status
 	// of the future. This may be called any number of times - all calls will
@@ -19,6 +20,8 @@ type Future interface {
 	// Error will only return generic errors related to raft, such
 	// as ErrLeadershipLost, or ErrRaftShutdown. Some operations, such as
 	// ApplyLog, may also return errors from other methods.
+	// lyf: 这里只是实现了future最简单的功能
+	// lyf: 提供了一个error阻塞，调用该方法后，线程将会阻塞，直到返回一个结果
 	Error() error
 }
 
@@ -89,10 +92,15 @@ func (e errorFuture) Index() uint64 {
 
 // deferError can be embedded to allow a future
 // to provide an error in the future.
+// lyf: 给那些等待提交成功的类，提供错误服务？？
 type deferError struct {
-	err        error
-	errCh      chan error
-	responded  bool
+	// lyf: 记录错误
+	err error
+	// lyf: 错误channel，用它就可以实现调用Error进入阻塞
+	errCh chan error
+	// lyf: 记录该future是否已经返回了
+	responded bool
+	// lyf: shutdown？用来兜底吗？
 	ShutdownCh chan struct{}
 }
 
@@ -101,15 +109,19 @@ func (d *deferError) init() {
 }
 
 func (d *deferError) Error() error {
+	// lyf: patch第二次调用
 	if d.err != nil {
 		// Note that when we've received a nil error, this
 		// won't trigger, but the channel is closed after
 		// send so we'll still return nil below.
 		return d.err
 	}
+	// lyf: 这个为nil，表示没有初始化，使用panic跑出异常
+	// lyf: go中使用panic抛出异常，然后在defer中使用recover来捕获
 	if d.errCh == nil {
 		panic("waiting for response on nil channel")
 	}
+	// lyf: 阻塞，直到channel中有数据
 	select {
 	case d.err = <-d.errCh:
 	case <-d.ShutdownCh:
@@ -125,6 +137,7 @@ func (d *deferError) respond(err error) {
 	if d.responded {
 		return
 	}
+	// lyf: 发送error，并关闭
 	d.errCh <- err
 	close(d.errCh)
 	d.responded = true
@@ -149,10 +162,14 @@ type bootstrapFuture struct {
 
 // logFuture is used to apply a log entry and waits until
 // the log is considered committed.
+// lyf: 等待一个log提交成功
 type logFuture struct {
+	// lyf: 结构体的内嵌
 	deferError
-	log      Log
+	log Log
+	// lyf: 该future的结果
 	response interface{}
+	// lyf: 记录和follower同步的时间
 	dispatch time.Time
 }
 

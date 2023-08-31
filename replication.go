@@ -30,6 +30,7 @@ var (
 
 // followerReplication is in charge of sending snapshots and log entries from
 // this leader during this particular term to a remote follower.
+// lyf: 该结构体是一个重点结构体；用来和follower同步
 type followerReplication struct {
 	// currentTerm and nextIndex must be kept at the top of the struct so
 	// they're 64 bit aligned which is a requirement for atomic ops on 32 bit

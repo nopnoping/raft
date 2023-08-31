@@ -85,13 +85,20 @@ type commitTuple struct {
 
 // leaderState is state that is used while we are a leader.
 type leaderState struct {
+	// lyf: 用来优化的；表明leader的角色正在发生变化
 	leadershipTransferInProgress int32 // indicates that a leadership transfer is in progress.
-	commitCh                     chan struct{}
-	commitment                   *commitment
-	inflight                     *list.List // list of logFuture in log index order
-	replState                    map[ServerID]*followerReplication
-	notify                       map[*verifyFuture]struct{}
-	stepDown                     chan struct{}
+	// lyf: 用来表示某个log成功commit了？这里channel中存储的数据是struct，也就是什么都能存储？
+	commitCh chan struct{}
+	// lyf: 用来commit的结构
+	commitment *commitment
+	// lyf: 记录了待commit的logs
+	inflight *list.List // list of logFuture in log index order
+	// lyf: 每个follower的同步类
+	replState map[ServerID]*followerReplication
+	// lyf: 用来表明当前依然是leader
+	notify map[*verifyFuture]struct{}
+	// lyf: 降级
+	stepDown chan struct{}
 }
 
 // setLeader is used to modify the current leader Address and ID of the cluster
@@ -836,6 +843,7 @@ func (r *Raft) leaderLoop() {
 			r.mainThreadSaturation.working()
 			b.respond(ErrCantBootstrap)
 
+		// lyf: leader处理新提交的log
 		case newLog := <-r.applyCh:
 			r.mainThreadSaturation.working()
 			if r.getLeadershipTransferInProgress() {
@@ -844,12 +852,14 @@ func (r *Raft) leaderLoop() {
 				continue
 			}
 			// Group commit, gather all the ready commits
+			// lyf: 获得所有提交的log
 			ready := []*logFuture{newLog}
 		GROUP_COMMIT_LOOP:
 			for i := 0; i < r.config().MaxAppendEntries; i++ {
 				select {
 				case newLog := <-r.applyCh:
 					ready = append(ready, newLog)
+				// lyf: 单独的break，只能跳出select，带了label后，就可以跳过整个for循环
 				default:
 					break GROUP_COMMIT_LOOP
 				}
@@ -859,9 +869,11 @@ func (r *Raft) leaderLoop() {
 			if stepDown {
 				// we're in the process of stepping down as leader, don't process anything new
 				for i := range ready {
+					// lyf: 传递future的error
 					ready[i].respond(ErrNotLeader)
 				}
 			} else {
+				// lyf: 同步新apply的log
 				r.dispatchLogs(ready)
 			}
 
@@ -1186,6 +1198,8 @@ func (r *Raft) dispatchLogs(applyLogs []*logFuture) {
 	logs := make([]*Log, n)
 	metrics.SetGauge([]string{"raft", "leader", "dispatchNumLogs"}, float32(n))
 
+	// lyf: 更新log的index、term这些数据；然后raft记录哪些log处于commit环节中
+	// lyf: 这个inflight取名和tcp中发送了数据，但是没有确认的取名一致
 	for idx, applyLog := range applyLogs {
 		applyLog.dispatch = now
 		lastIndex++
@@ -1197,6 +1211,8 @@ func (r *Raft) dispatchLogs(applyLogs []*logFuture) {
 	}
 
 	// Write the log entry locally
+	// lyf: 持久化logs，如果失败，applyFuture返回错误；
+	// lyf: 这里有个优化，失败后直接变为follower
 	if err := r.logs.StoreLogs(logs); err != nil {
 		r.logger.Error("failed to commit logs", "error", err)
 		for _, applyLog := range applyLogs {

@@ -11,18 +11,23 @@ import (
 // Commitment is used to advance the leader's commit index. The leader and
 // replication goroutines report in newly written entries with match(), and
 // this notifies on commitCh when the commit index has advanced.
+// lyf: 用来计算commitIndex
 type commitment struct {
 	// protects matchIndexes and commitIndex
 	sync.Mutex
 	// notified when commitIndex increases
+	// lyf: 这个channel和leaderState中的是一个吗？
 	commitCh chan struct{}
 	// voter ID to log index: the server stores up through this log entry
+	// lyf: 每个follower的匹配状态
 	matchIndexes map[ServerID]uint64
 	// a quorum stores up through this log entry. monotonically increases.
+	// lyf: commit的值
 	commitIndex uint64
 	// the first index of this leader's term: this needs to be replicated to a
 	// majority of the cluster before this leader may mark anything committed
 	// (per Raft's commitment rule)
+	// lyf: 这个leader开始时，提交的nop的index
 	startIndex uint64
 }
 

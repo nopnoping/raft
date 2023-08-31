@@ -79,6 +79,7 @@ func (c *commitment) getCommitIndex() uint64 {
 // leader has written the new entry or a follower has replied to an
 // AppendEntries RPC. The given server's disk agrees with this server's log up
 // through the given index.
+// lyf: 用来更新同步的lastIndex
 func (c *commitment) match(server ServerID, matchIndex uint64) {
 	c.Lock()
 	defer c.Unlock()
@@ -90,6 +91,7 @@ func (c *commitment) match(server ServerID, matchIndex uint64) {
 
 // Internal helper to calculate new commitIndex from matchIndexes.
 // Must be called with lock held.
+// lyf: 计算当前的commit；方法很暴力，排序后取中间
 func (c *commitment) recalculate() {
 	if len(c.matchIndexes) == 0 {
 		return
@@ -104,6 +106,8 @@ func (c *commitment) recalculate() {
 
 	if quorumMatchIndex > c.commitIndex && quorumMatchIndex >= c.startIndex {
 		c.commitIndex = quorumMatchIndex
+		// lyf: 非阻塞的通知；为什么用非阻塞的？
+		// lyf: 可能会有多个在通知；只要有一个通知消息没有被消费，就是一样的，所以就用非阻塞的
 		asyncNotifyCh(c.commitCh)
 	}
 }

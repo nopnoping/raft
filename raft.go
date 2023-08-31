@@ -1227,6 +1227,7 @@ func (r *Raft) dispatchLogs(applyLogs []*logFuture) {
 	r.setLastLog(lastIndex, term)
 
 	// Notify the replicators of the new log
+	// lyf: 非阻塞的通知所有同步协程
 	for _, f := range r.leaderState.replState {
 		asyncNotifyCh(f.triggerCh)
 	}

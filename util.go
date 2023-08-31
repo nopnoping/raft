@@ -72,6 +72,7 @@ func generateUUID() string {
 
 // asyncNotifyCh is used to do an async channel send
 // to a single channel without blocking.
+// lyf: 非阻塞的通知
 func asyncNotifyCh(ch chan struct{}) {
 	select {
 	case ch <- struct{}{}:

@@ -95,6 +95,7 @@ type followerReplication struct {
 	// notify is a map of futures to be resolved upon receipt of an
 	// acknowledgement, then cleared from this map.
 	// lyf: 这个是用来干啥的，没看懂
+	// lyf: 存储leader验证future
 	notify map[*verifyFuture]struct{}
 	// notifyLock protects 'notify'.
 	notifyLock sync.Mutex
@@ -112,6 +113,8 @@ type followerReplication struct {
 
 // notifyAll is used to notify all the waiting verify futures
 // if the follower believes we are still the leader.
+// lyf: 该方法是辅助验证当前leader还是不是leader
+// lyf: 告诉verifyFuture当前follower还认不认这个leader
 func (s *followerReplication) notifyAll(leader bool) {
 	// Clear the waiting notifies minimizing lock time
 	s.notifyLock.Lock()
@@ -161,6 +164,7 @@ func (r *Raft) replicate(s *followerReplication) {
 
 RPC:
 	// lyf: 这个用在哪儿？
+	// lyf: 同步时，如果收到了stopCh，就会返回true，此时就可以停止
 	shouldStop := false
 	for !shouldStop {
 		select {
@@ -199,6 +203,7 @@ RPC:
 		}
 
 		// If things looks healthy, switch to pipeline mode
+		// lyf: 只要同步成功，就会切换到pipeline模式
 		if !shouldStop && s.allowPipeline {
 			goto PIPELINE
 		}
@@ -347,6 +352,7 @@ SEND_SNAP:
 // lyf: 给follower发送快照
 func (r *Raft) sendLatestSnapshot(s *followerReplication) (bool, error) {
 	// Get the snapshots
+	// lyf: 获取snapshot元信息
 	snapshots, err := r.snapshots.List()
 	if err != nil {
 		r.logger.Error("failed to list snapshots", "error", err)
@@ -359,6 +365,7 @@ func (r *Raft) sendLatestSnapshot(s *followerReplication) (bool, error) {
 	}
 
 	// Open the most recent snapshot
+	// lyf: 获取最新的snapshot数据
 	snapID := snapshots[0].ID
 	meta, snapshot, err := r.snapshots.Open(snapID)
 	if err != nil {
@@ -368,6 +375,7 @@ func (r *Raft) sendLatestSnapshot(s *followerReplication) (bool, error) {
 	defer snapshot.Close()
 
 	// Setup the request
+	// lyf: 构造req
 	req := InstallSnapshotRequest{
 		RPCHeader:       r.getRPCHeader(),
 		SnapshotVersion: meta.Version,
@@ -389,6 +397,7 @@ func (r *Raft) sendLatestSnapshot(s *followerReplication) (bool, error) {
 	// Make the call
 	start := time.Now()
 	var resp InstallSnapshotResponse
+	// lyf: 发送InstallSnapshot请求；数据是在传输层中传递的
 	if err := r.trans.InstallSnapshot(peer.ID, peer.Address, &req, &resp, snapshot); err != nil {
 		r.logger.Error("failed to install snapshot", "id", snapID, "error", err)
 		s.failures++
@@ -400,6 +409,7 @@ func (r *Raft) sendLatestSnapshot(s *followerReplication) (bool, error) {
 	metrics.MeasureSince([]string{"raft", "replication", "installSnapshot", string(peer.ID)}, start)
 
 	// Check for a newer term, stop running
+	// lyf: 下面这些和AppendEntries的发送类型
 	if resp.Term > req.Term {
 		r.handleStaleTerm(s)
 		return true, nil
@@ -411,6 +421,7 @@ func (r *Raft) sendLatestSnapshot(s *followerReplication) (bool, error) {
 	// Check for success
 	if resp.Success {
 		// Update the indexes
+		// lyf: 更新nextIndex，并计算commit
 		atomic.StoreUint64(&s.nextIndex, meta.Index+1)
 		s.commitment.match(peer.ID, meta.Index)
 
@@ -429,8 +440,11 @@ func (r *Raft) sendLatestSnapshot(s *followerReplication) (bool, error) {
 // heartbeat is used to periodically invoke AppendEntries on a peer
 // to ensure they don't time out. This is done async of replicate(),
 // since that routine could potentially be blocked on disk IO.
+// lyf: 定期发送心跳
 func (r *Raft) heartbeat(s *followerReplication, stopCh chan struct{}) {
 	var failures uint64
+	// lyf: 心跳不需要去验证prvLog这些吗？
+	// lyf: 因为心跳并不关心返回的结果是true or false；只要能正确发送即可
 	req := AppendEntriesRequest{
 		RPCHeader: r.getRPCHeader(),
 		Term:      s.currentTerm,
@@ -442,6 +456,7 @@ func (r *Raft) heartbeat(s *followerReplication, stopCh chan struct{}) {
 	for {
 		// Wait for the next heartbeat interval or forced notify
 		select {
+		// lyf: notifyCh是用来强制发送心跳，而无需等待超时
 		case <-s.notifyCh:
 		case <-randomTimeout(r.config().HeartbeatTimeout / 10):
 		case <-stopCh:
@@ -454,17 +469,22 @@ func (r *Raft) heartbeat(s *followerReplication, stopCh chan struct{}) {
 
 		start := time.Now()
 		if err := r.trans.AppendEntries(peer.ID, peer.Address, &req, &resp); err != nil {
+			// lyf: 失败了，计算一下等待时间，限制重试频率
+			// lyf: 这里和appendEntries不同的是，限定了上限，capped
 			nextBackoffTime := cappedExponentialBackoff(failureWait, failures, maxFailureScale, r.config().HeartbeatTimeout/2)
 			r.logger.Error("failed to heartbeat to", "peer", peer.Address, "backoff time",
 				nextBackoffTime, "error", err)
+			// lyf: 为啥要给所有的observer发送失败信息?这有啥优化
 			r.observe(FailedHeartbeatObservation{PeerID: peer.ID, LastContact: s.LastContact()})
 			failures++
+			// lyf: 每个select的时候，都要考虑到兜底关闭的channel
 			select {
 			case <-time.After(nextBackoffTime):
 			case <-stopCh:
 				return
 			}
 		} else {
+			// lyf: 恢复心跳还会给所有observer发
 			if failures > 0 {
 				r.observe(ResumedHeartbeatObservation{PeerID: peer.ID})
 			}
@@ -474,6 +494,9 @@ func (r *Raft) heartbeat(s *followerReplication, stopCh chan struct{}) {
 			metrics.MeasureSinceWithLabels([]string{"raft", "replication", "heartbeat"}, start, labels)
 			// Duplicated information. Kept for backward compatibility.
 			metrics.MeasureSince([]string{"raft", "replication", "heartbeat", string(peer.ID)}, start)
+			// lyf: 还是不懂这个有啥用
+			// lyf: 心跳之后，将结果告诉存储的所有verifyFuture，来验证当前还是不是leader
+			// lyf: 也就是说，不传递prvLog，follower也会返回true？
 			s.notifyAll(resp.Success)
 		}
 	}
@@ -713,6 +736,6 @@ func updateLastAppended(s *followerReplication, req *AppendEntriesRequest) {
 	}
 
 	// Notify still leader
-	// lyf: 没看懂这个有啥用
+	// lyf: 完成verifyFuture任务，该follower认为该node依然是leader
 	s.notifyAll(true)
 }

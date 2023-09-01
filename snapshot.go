@@ -12,16 +12,20 @@ import (
 )
 
 // SnapshotMeta is for metadata of a snapshot.
+// lyf: snapShot的元数据定义
 type SnapshotMeta struct {
 	// Version is the version number of the snapshot metadata. This does not cover
 	// the application's data in the snapshot, that should be versioned
 	// separately.
+	// lyf: 不同版本的snapShoot；目前只有v1和v2
 	Version SnapshotVersion
 
 	// ID is opaque to the store, and is used for opening.
+	// lyf: 用来读取快照数据
 	ID string
 
 	// Index and Term store when the snapshot was taken.
+	// lyf: 提交snapShot时对应的index和term
 	Index uint64
 	Term  uint64
 
@@ -31,10 +35,14 @@ type SnapshotMeta struct {
 
 	// Configuration and ConfigurationIndex are present in version 1
 	// snapshots and later.
+	// lyf: 相关的配置
 	Configuration      Configuration
 	ConfigurationIndex uint64
 
 	// Size is the size of the snapshot in bytes.
+	// lyf: 数据大小；但是数据存储在哪儿？
+	// lyf: 该结构体仅仅只是元数据；即标记快照在磁盘上存储的关键信息；真正要读取快照数据时，是要通过ID去获取的
+	// lyf: 猜测会将快照作为文件存储？ID就是文件名
 	Size int64
 }
 

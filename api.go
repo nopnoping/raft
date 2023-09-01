@@ -215,7 +215,7 @@ type Raft struct {
 
 	// verifyCh is used to async send verify futures to the main thread
 	// to verify we are still the leader
-	// lyf: 异步的让我们知道，自己还是leader？这个设计来是做什么优化的？
+	// lyf: 该channel提供了验证当前还是不是leader的功能
 	verifyCh chan *verifyFuture
 
 	// configurationsCh is used to get the configuration data safely from
@@ -889,6 +889,7 @@ func (r *Raft) Barrier(timeout time.Duration) Future {
 // VerifyLeader is used to ensure this peer is still the leader. It may be used
 // to prevent returning stale data from the FSM after the peer has lost
 // leadership.
+// lyf: 提供的功能，就是去验证当前是否还是leader
 func (r *Raft) VerifyLeader() Future {
 	metrics.IncrCounter([]string{"raft", "verify_leader"}, 1)
 	verifyFuture := &verifyFuture{}

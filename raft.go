@@ -95,7 +95,7 @@ type leaderState struct {
 	inflight *list.List // list of logFuture in log index order
 	// lyf: 每个follower的同步类
 	replState map[ServerID]*followerReplication
-	// lyf: 用来表明当前依然是leader
+	// lyf: 存储当前的待验证任务
 	notify map[*verifyFuture]struct{}
 	// lyf: 降级
 	stepDown chan struct{}
@@ -792,6 +792,7 @@ func (r *Raft) leaderLoop() {
 			r.mainThreadSaturation.working()
 			if v.quorumSize == 0 {
 				// Just dispatched, start the verification
+				// lyf: 开始验证；就是触发每个follower的心跳，看能否成功
 				r.verifyLeader(v)
 			} else if v.votes < v.quorumSize {
 				// Early return, means there must be a new leader
@@ -910,6 +911,7 @@ func (r *Raft) leaderLoop() {
 
 // verifyLeader must be called from the main thread for safety.
 // Causes the followers to attempt an immediate heartbeat.
+// lyf: 验证当前还是不是leader；主要做的是初始化工作
 func (r *Raft) verifyLeader(v *verifyFuture) {
 	// Current leader always votes for self
 	v.votes = 1
@@ -922,11 +924,14 @@ func (r *Raft) verifyLeader(v *verifyFuture) {
 	}
 
 	// Track this request
+	// lyf: 通知channel和raft一样，这样就可以触发主流程中的校验
 	v.notifyCh = r.verifyCh
+	// lyf: leaderState中存储当前待验证的任务
 	r.leaderState.notify[v] = struct{}{}
 
 	// Trigger immediate heartbeats
 	for _, repl := range r.leaderState.replState {
+		// lyf: 存储在follower的同步数据中
 		repl.notifyLock.Lock()
 		repl.notify[v] = struct{}{}
 		repl.notifyLock.Unlock()

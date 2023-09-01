@@ -563,6 +563,8 @@ func (r *Raft) startStopReplication() {
 			}
 
 			r.leaderState.replState[server.ID] = s
+			// lyf: 使用raftState来启动协程；这样结束的时候，可以等待所有子流程结束后，主流程再结束
+			// lyf: 启动每个follower对应的同步线程
 			r.goFunc(func() { r.replicate(s) })
 			asyncNotifyCh(s.triggerCh)
 			r.observe(PeerObservation{Peer: server, Removed: false})
@@ -1187,6 +1189,7 @@ func (r *Raft) appendConfigurationEntry(future *configurationChangeFuture) {
 
 // dispatchLog is called on the leader to push a log to disk, mark it
 // as inflight and begin replication of it.
+// lyf: 将log持久化，并标记在inflight中，然后开始同步
 func (r *Raft) dispatchLogs(applyLogs []*logFuture) {
 	now := time.Now()
 	defer metrics.MeasureSince([]string{"raft", "leader", "dispatchLog"}, now)

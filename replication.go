@@ -63,6 +63,7 @@ type followerReplication struct {
 	// index; replication should be attempted with a best effort up through that
 	// index, before exiting.
 	// lyf: 当leader不再是leader或则follower从集群中移除时，使用该channel来通知
+	// lyf: 并且会传递一个index，让follower尽量同步到这里
 	stopCh chan uint64
 
 	// triggerCh is notified every time new entries are appended to the log.
@@ -148,22 +149,30 @@ func (s *followerReplication) setLastContact() {
 
 // replicate is a long running routine that replicates log entries to a single
 // follower.
+// lyf: 该文件是同步文件，但是实现的确实raft结构体的方法；同一个包下，任何地方都可以去实现结构体的方法
+// lyf: 这样可以更好的将处理同一领域的方法，放在一起？
+// lyf: 启动同步
 func (r *Raft) replicate(s *followerReplication) {
 	// Start an async heartbeating routing
 	stopHeartbeat := make(chan struct{})
 	defer close(stopHeartbeat)
+	// lyf: 启动心跳协程
 	r.goFunc(func() { r.heartbeat(s, stopHeartbeat) })
 
 RPC:
+	// lyf: 这个用在哪儿？
 	shouldStop := false
 	for !shouldStop {
 		select {
+		// lyf: leader变更的优化；
+		// lyf: 发送一个index，让follower尽量同步到这儿，然后关闭协程
 		case maxIndex := <-s.stopCh:
 			// Make a best effort to replicate up to this index
 			if maxIndex > 0 {
 				r.replicateTo(s, maxIndex)
 			}
 			return
+		// lyf: 这个是提供的哪个场景？
 		case deferErr := <-s.triggerDeferErrorCh:
 			lastLogIdx, _ := r.getLastLog()
 			shouldStop = r.replicateTo(s, lastLogIdx)
@@ -172,6 +181,7 @@ RPC:
 			} else {
 				deferErr.respond(fmt.Errorf("replication failed"))
 			}
+		// lyf: 当有新的log时，会触发
 		case <-s.triggerCh:
 			lastLogIdx, _ := r.getLastLog()
 			shouldStop = r.replicateTo(s, lastLogIdx)
@@ -180,6 +190,9 @@ RPC:
 		// raft commits stop flowing naturally. The actual heartbeats
 		// can't do this to keep them unblocked by disk IO on the
 		// follower. See https://github.com/hashicorp/raft/issues/282.
+		// lyf: 心跳不会去同步数据，就不会有新的commit；
+		// lyf: 有时会由于disk/network延时，导致数据没有同步上，所以会周期性的同步一下
+		// lyf: 兜底？
 		case <-randomTimeout(r.config().CommitTimeout):
 			lastLogIdx, _ := r.getLastLog()
 			shouldStop = r.replicateTo(s, lastLogIdx)
@@ -199,6 +212,7 @@ PIPELINE:
 	// Replicates using a pipeline for high performance. This method
 	// is not able to gracefully recover from errors, and so we fall back
 	// to standard mode on failure.
+	// lyf: 使用pipeline进行同步；如果出错，就退化到普通的
 	if err := r.pipelineReplicate(s); err != nil {
 		if err != ErrPipelineReplicationNotSupported {
 			s.peerLock.RLock()
@@ -213,6 +227,7 @@ PIPELINE:
 // replicateTo is a helper to replicate(), used to replicate the logs up to a
 // given last index.
 // If the follower log is behind, we take care to bring them up to date.
+// lyf: 将follower的lastIndex同步到目标index
 func (r *Raft) replicateTo(s *followerReplication, lastIndex uint64) (shouldStop bool) {
 	// Create the base request
 	var req AppendEntriesRequest
@@ -222,6 +237,7 @@ func (r *Raft) replicateTo(s *followerReplication, lastIndex uint64) (shouldStop
 
 START:
 	// Prevent an excessive retry rate on errors
+	// lyf: 防止失败后一直重试；所以根据失败次数，计算一个延时
 	if s.failures > 0 {
 		select {
 		case <-time.After(backoff(failureWait, s.failures, maxFailureScale)):
@@ -234,7 +250,9 @@ START:
 	s.peerLock.RUnlock()
 
 	// Setup the request
+	// lyf: 构造appendEntries的请求参数
 	if err := r.setupAppendEntries(s, &req, atomic.LoadUint64(&s.nextIndex), lastIndex); err == ErrLogNotFound {
+		// lyf: 当日志获取失败时，可能是由于该日志位于snapShoot中，所以需要进行快照同步
 		goto SEND_SNAP
 	} else if err != nil {
 		return
@@ -242,31 +260,43 @@ START:
 
 	// Make the RPC call
 	start = time.Now()
+	// lyf: 发起appendEntries
 	if err := r.trans.AppendEntries(peer.ID, peer.Address, &req, &resp); err != nil {
 		r.logger.Error("failed to appendEntries to", "peer", peer, "error", err)
 		s.failures++
+		// lyf: 这里是return，也就是说失败之后，不是循环去重试，也就导致网络原因引发同步之后；如果不周期的再次触发同步，数据就无法提交
+		// lyf: 这里如果改为goto START 会有优化效果吗？
+		// lyf: optimization
 		return
 	}
+	// lyf: metrics
 	appendStats(string(peer.ID), start, float32(len(req.Entries)))
 
 	// Check for a newer term, stop running
+	// lyf: follower有更大的term；当前leader需要退化
 	if resp.Term > req.Term {
 		r.handleStaleTerm(s)
 		return true
 	}
 
 	// Update the last contact
+	// lyf: 记录最后一次通信时间
 	s.setLastContact()
 
 	// Update s based on success
 	if resp.Success {
 		// Update our replication state
+		// lyf: 更新该follower的lastIndex
 		updateLastAppended(s, &req)
 
 		// Clear any failures, allow pipelining
+		// lyf: 清除失败记录；并且开启pipeline
+		// lyf: 所以只要成功一次，就会开启？
 		s.failures = 0
 		s.allowPipeline = true
 	} else {
+		// lyf: 失败之后的尝试，是论文中的减一；这里可以优化？
+		// lyf: optimization
 		atomic.StoreUint64(&s.nextIndex, max(min(s.nextIndex-1, resp.LastLog+1), 1))
 		if resp.NoRetryBackoff {
 			s.failures = 0
@@ -282,6 +312,8 @@ CHECK_MORE:
 	// where we are asked to replicate to a given index and then shutdown,
 	// it's better to not loop in here to send lots of entries to a straggler
 	// that's leaving the cluster anyways.
+	// lyf: 为什么这里还要获取stopCh的消息？在replicate中不是已经处理个该消息吗？
+	// lyf: 这里解决的场景，是正在循环的去同步，但是又要求关闭，可以快速结束
 	select {
 	case <-s.stopCh:
 		return true
@@ -289,6 +321,7 @@ CHECK_MORE:
 	}
 
 	// Check if there are more logs to replicate
+	// lyf: 是否同步到lastIndex，没有就继续
 	if atomic.LoadUint64(&s.nextIndex) <= lastIndex {
 		goto START
 	}
@@ -297,6 +330,7 @@ CHECK_MORE:
 	// SEND_SNAP is used when we fail to get a log, usually because the follower
 	// is too far behind, and we must ship a snapshot down instead
 SEND_SNAP:
+	// lyf: nextLog在快照中，进行快照同步
 	if stop, err := r.sendLatestSnapshot(s); stop {
 		return true
 	} else if err != nil {
@@ -310,6 +344,7 @@ SEND_SNAP:
 
 // sendLatestSnapshot is used to send the latest snapshot we have
 // down to our follower.
+// lyf: 给follower发送快照
 func (r *Raft) sendLatestSnapshot(s *followerReplication) (bool, error) {
 	// Get the snapshots
 	snapshots, err := r.snapshots.List()
@@ -448,6 +483,8 @@ func (r *Raft) heartbeat(s *followerReplication, stopCh chan struct{}) {
 // and want to switch to a higher performance pipeline mode of replication.
 // We only pipeline AppendEntries commands, and if we ever hit an error, we fall
 // back to the standard replication which can handle more complex situations.
+// lyf: 高性能同步
+// lyf: 好像是通过优化传输层，提高的效率?
 func (r *Raft) pipelineReplicate(s *followerReplication) error {
 	s.peerLock.RLock()
 	peer := s.peer
@@ -476,6 +513,7 @@ func (r *Raft) pipelineReplicate(s *followerReplication) error {
 
 	shouldStop := false
 SEND:
+	// lyf: 整体流程和普通的一致；只是使用了pipeline的传输层
 	for !shouldStop {
 		select {
 		case <-finishCh:
@@ -578,9 +616,11 @@ func (r *Raft) setupAppendEntries(s *followerReplication, req *AppendEntriesRequ
 	// this is needed for retro compatibility, before RPCHeader.Addr was added
 	req.Leader = r.trans.EncodePeer(r.localID, r.localAddr)
 	req.LeaderCommitIndex = r.getCommitIndex()
+	// lyf: 获取之前的index和term，用于follower校验
 	if err := r.setPreviousLog(req, nextIndex); err != nil {
 		return err
 	}
+	// lyf: 获取此次传递要传送的logs
 	if err := r.setNewLogs(req, nextIndex, lastIndex); err != nil {
 		return err
 	}
@@ -589,20 +629,27 @@ func (r *Raft) setupAppendEntries(s *followerReplication, req *AppendEntriesRequ
 
 // setPreviousLog is used to setup the PrevLogEntry and PrevLogTerm for an
 // AppendEntriesRequest given the next index to replicate.
+// lyf: 设置prvIndex和prvTerm，用于follower校验
 func (r *Raft) setPreviousLog(req *AppendEntriesRequest, nextIndex uint64) error {
 	// Guard for the first index, since there is no 0 log entry
 	// Guard against the previous index being a snapshot as well
+	// lyf: 这里保证了nextIndex不在快照中，并且保存了快照最后一个index和term
+	// lyf: 所以从log里面取prvLog时，不会在快照中
 	lastSnapIdx, lastSnapTerm := r.getLastSnapshot()
 	if nextIndex == 1 {
 		req.PrevLogEntry = 0
 		req.PrevLogTerm = 0
 
 	} else if (nextIndex - 1) == lastSnapIdx {
+		// lyf: 这里记录了snapShoot最后的log的信息，这样就不用发送快照
+		// lyf: 但是follower难道不需要进行快照吗？？
 		req.PrevLogEntry = lastSnapIdx
 		req.PrevLogTerm = lastSnapTerm
 
 	} else {
 		var l Log
+		// lyf: 这是直接从持久化缓存中获取log；
+		// lyf: 保证了log不会在快照中
 		if err := r.logs.GetLog(nextIndex-1, &l); err != nil {
 			r.logger.Error("failed to get log", "index", nextIndex-1, "error", err)
 			return err
@@ -616,10 +663,12 @@ func (r *Raft) setPreviousLog(req *AppendEntriesRequest, nextIndex uint64) error
 }
 
 // setNewLogs is used to setup the logs which should be appended for a request.
+// lyf: 获取同步的log数据
 func (r *Raft) setNewLogs(req *AppendEntriesRequest, nextIndex, lastIndex uint64) error {
 	// Append up to MaxAppendEntries or up to the lastIndex. we need to use a
 	// consistent value for maxAppendEntries in the lines below in case it ever
 	// becomes reloadable.
+	// lyf: 设置了一个最大传输log上限，防止新follower进cluster后，第一次传输的数据太大
 	maxAppendEntries := r.config().MaxAppendEntries
 	req.Entries = make([]*Log, 0, maxAppendEntries)
 	maxIndex := min(nextIndex+uint64(maxAppendEntries)-1, lastIndex)
@@ -659,9 +708,11 @@ func updateLastAppended(s *followerReplication, req *AppendEntriesRequest) {
 	if logs := req.Entries; len(logs) > 0 {
 		last := logs[len(logs)-1]
 		atomic.StoreUint64(&s.nextIndex, last.Index+1)
+		// lyf: 调用commitment更新当前记录的lastIndex，并且重新计算commit
 		s.commitment.match(s.peer.ID, last.Index)
 	}
 
 	// Notify still leader
+	// lyf: 没看懂这个有啥用
 	s.notifyAll(true)
 }

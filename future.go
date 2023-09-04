@@ -288,6 +288,7 @@ func (c *configurationsFuture) Index() uint64 {
 
 // vote is used to respond to a verifyFuture.
 // This may block when responding on the notifyCh.
+// lyf: 该follower是否认可该node为leader
 func (v *verifyFuture) vote(leader bool) {
 	v.voteLock.Lock()
 	defer v.voteLock.Unlock()
@@ -304,6 +305,7 @@ func (v *verifyFuture) vote(leader bool) {
 			v.notifyCh = nil
 		}
 	} else {
+		// lyf: 当follower不认为它是leader时，将会提前发送信息给verifyCh
 		v.notifyCh <- v
 		v.notifyCh = nil
 	}

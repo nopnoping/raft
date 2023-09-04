@@ -795,6 +795,8 @@ func (r *Raft) leaderLoop() {
 				// lyf: 开始验证；就是触发每个follower的心跳，看能否成功
 				r.verifyLeader(v)
 			} else if v.votes < v.quorumSize {
+				// lyf: 如果verifyCh收到信息，并且不够半票；提前结束
+				// lyf: 这里存在的一种可能是，未来能够半数，但是有一个拒绝的提前失败了
 				// Early return, means there must be a new leader
 				r.logger.Warn("new leader elected, stepping down")
 				r.setState(Follower)
@@ -806,6 +808,8 @@ func (r *Raft) leaderLoop() {
 
 			} else {
 				// Quorum of members agree, we are still leader
+				// lyf: 达到半数，所以依然是leader
+				// lyf: 这里可能是因为某个follower不认可leader，但是认可的follower已经达到半数
 				delete(r.leaderState.notify, v)
 				for _, repl := range r.leaderState.replState {
 					repl.cleanNotify(v)

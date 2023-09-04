@@ -177,6 +177,7 @@ RPC:
 			}
 			return
 		// lyf: 这个是提供的哪个场景？
+		// lyf: 看上去就是用来触发是否需要停止
 		case deferErr := <-s.triggerDeferErrorCh:
 			lastLogIdx, _ := r.getLastLog()
 			shouldStop = r.replicateTo(s, lastLogIdx)

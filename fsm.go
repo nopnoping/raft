@@ -235,6 +235,7 @@ func (r *Raft) runFSM() {
 		case ptr := <-r.fsmMutateCh:
 			saturation.working()
 
+			// lyf: 变量的.type表示类型
 			switch req := ptr.(type) {
 			case []*commitTuple:
 				applyBatch(req)

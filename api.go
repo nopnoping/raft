@@ -116,6 +116,9 @@ type Raft struct {
 	// take a user snapshot on the leader, otherwise we might restore the
 	// snapshot and apply old logs to it that were in the pipe.
 	// lyf: fsm要apply时，使用该channel；为了解耦合？
+	// lyf: 当log被commit后，构造成commitTuple，来触发该log的apply
+	// lyf: 还有中情况，是来restore snapshot
+	// lyf: 这里的interface{}才是真正的传递任何数据的
 	fsmMutateCh chan interface{}
 
 	// fsmSnapshotCh is used to trigger a new snapshot being taken

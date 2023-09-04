@@ -88,6 +88,7 @@ type leaderState struct {
 	// lyf: 用来优化的；表明leader的角色正在发生变化
 	leadershipTransferInProgress int32 // indicates that a leadership transfer is in progress.
 	// lyf: 用来表示某个log成功commit了？这里channel中存储的数据是struct，也就是什么都能存储？
+	// lyf: 这里就是表明有新的log提交了；存储的类型是struct{}表示只是用来通知，不需要传递具体数值，所以传递空的struct{}{}
 	commitCh chan struct{}
 	// lyf: 用来commit的结构
 	commitment *commitment
@@ -725,15 +726,18 @@ func (r *Raft) leaderLoop() {
 			r.setLeadershipTransferInProgress(true)
 			go r.leadershipTransfer(*id, *address, state, stopCh, doneCh)
 
+		// lyf: 有新的log commit
 		case <-r.leaderState.commitCh:
 			r.mainThreadSaturation.working()
 			// Process the newly committed entries
+			// lyf: 将commitment中记录的commitIndex更新到raft中
 			oldCommitIndex := r.getCommitIndex()
 			commitIndex := r.leaderState.commitment.getCommitIndex()
 			r.setCommitIndex(commitIndex)
 
 			// New configuration has been committed, set it as the committed
 			// value.
+			// lyf: 配置？？
 			if r.configurations.latestIndex > oldCommitIndex &&
 				r.configurations.latestIndex <= commitIndex {
 				r.setCommittedConfiguration(r.configurations.latest, r.configurations.latestIndex)
@@ -743,11 +747,15 @@ func (r *Raft) leaderLoop() {
 			}
 
 			start := time.Now()
+			// lyf: 记录inflight中，已经提交的log
 			var groupReady []*list.Element
+			// lyf: ready log对呀的log future
 			groupFutures := make(map[uint64]*logFuture)
+			// lyf: 记录groupReady中最大的idx
 			var lastIdxInGroup uint64
 
 			// Pull all inflight logs that are committed off the queue.
+			// lyf: 获取ready的log
 			for e := r.leaderState.inflight.Front(); e != nil; e = e.Next() {
 				commitLog := e.Value.(*logFuture)
 				idx := commitLog.log.Index
@@ -764,6 +772,7 @@ func (r *Raft) leaderLoop() {
 			}
 
 			// Process the group
+			// lyf: 处理ready log，并将其从inflight中移除
 			if len(groupReady) != 0 {
 				r.processLogs(lastIdxInGroup, groupFutures)
 
@@ -1252,14 +1261,18 @@ func (r *Raft) dispatchLogs(applyLogs []*logFuture) {
 // pass futures=nil.
 // Leaders call this when entries are committed. They pass the futures from any
 // inflight logs.
+// lyf: 执行logs；执行到index这个log
+// lyf: 两种情况下使用：1. follower在appendEntries后，commit更新，执行logs；2. leader有新的commit提交后
 func (r *Raft) processLogs(index uint64, futures map[uint64]*logFuture) {
 	// Reject logs we've applied already
 	lastApplied := r.getLastApplied()
+	// lyf: 最后一次执行的logIndex，大于参数，则拒绝
 	if index <= lastApplied {
 		r.logger.Warn("skipping application of old log", "index", index)
 		return
 	}
 
+	// lyf: 为什么不单独抽离？
 	applyBatch := func(batch []*commitTuple) {
 		select {
 		case r.fsmMutateCh <- batch:
@@ -1282,6 +1295,7 @@ func (r *Raft) processLogs(index uint64, futures map[uint64]*logFuture) {
 	for idx := lastApplied + 1; idx <= index; idx++ {
 		var preparedLog *commitTuple
 		// Get the log, either from the future or from our log store
+		// lyf: log是从futureGroup中获取，还是从磁盘
 		future, futureOk := futures[idx]
 		if futureOk {
 			preparedLog = r.prepareLog(&future.log, future)
@@ -1298,21 +1312,26 @@ func (r *Raft) processLogs(index uint64, futures map[uint64]*logFuture) {
 		case preparedLog != nil:
 			// If we have a log ready to send to the FSM add it to the batch.
 			// The FSM thread will respond to the future.
+			// lyf: 添加到batch
 			batch = append(batch, preparedLog)
 
 			// If we have filled up a batch, send it to the FSM
+			// lyf: 达到最大限制，批量执行
 			if len(batch) >= maxAppendEntries {
 				applyBatch(batch)
 				batch = make([]*commitTuple, 0, maxAppendEntries)
 			}
 
 		case futureOk:
+			// lyf: future不为空，但是没有准备好log，表示该log的类型是不需要执行的
+			// lyf: 因此在这里对future返回
 			// Invoke the future if given.
 			future.respond(nil)
 		}
 	}
 
 	// If there are any remaining logs in the batch apply them
+	// lyf: 兜底，将剩下的都执行
 	if len(batch) != 0 {
 		applyBatch(batch)
 	}
@@ -1322,6 +1341,7 @@ func (r *Raft) processLogs(index uint64, futures map[uint64]*logFuture) {
 }
 
 // processLog is invoked to process the application of a single committed log entry.
+// lyf: 根据不同的log类型，构造commitTuple
 func (r *Raft) prepareLog(l *Log, future *logFuture) *commitTuple {
 	switch l.Type {
 	case LogBarrier:

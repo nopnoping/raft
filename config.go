@@ -135,6 +135,7 @@ const (
 )
 
 // Config provides any necessary configuration for the Raft server.
+// lyf: raft的配置类
 type Config struct {
 	// ProtocolVersion allows a Raft server to inter-operate with older
 	// Raft servers running an older version of the code. This is used to
@@ -144,26 +145,31 @@ type Config struct {
 	// configured with compatible versions. See ProtocolVersionMin and
 	// ProtocolVersionMax for the versions of the protocol that this server
 	// can _understand_.
+	// lyf: 库的版本
 	ProtocolVersion ProtocolVersion
 
 	// HeartbeatTimeout specifies the time in follower state without contact
 	// from a leader before we attempt an election.
+	// lyf: 心跳超时
 	HeartbeatTimeout time.Duration
 
 	// ElectionTimeout specifies the time in candidate state without contact
 	// from a leader before we attempt an election.
+	// lyf: 选举超时
 	ElectionTimeout time.Duration
 
 	// CommitTimeout specifies the time without an Apply operation before the
 	// leader sends an AppendEntry RPC to followers, to ensure a timely commit of
 	// log entries.
 	// Due to random staggering, may be delayed as much as 2x this value.
+	// lyf: 帮助同步的？？
 	CommitTimeout time.Duration
 
 	// MaxAppendEntries controls the maximum number of append entries
 	// to send at once. We want to strike a balance between efficiency
 	// and avoiding waste if the follower is going to reject because of
 	// an inconsistent log.
+	// lyf: 限制AppendEntry的最大logs
 	MaxAppendEntries int
 
 	// BatchApplyCh indicates whether we should buffer applyCh
@@ -171,18 +177,21 @@ type Config struct {
 	// but breaks the timeout guarantee on Apply. Specifically,
 	// a log can be added to the applyCh buffer but not actually be
 	// processed until after the specified timeout.
+	// lyf: 是否可以批量apply
 	BatchApplyCh bool
 
 	// If we are a member of a cluster, and RemovePeer is invoked for the
 	// local node, then we forget all peers and transition into the follower state.
 	// If ShutdownOnRemove is set, we additional shutdown Raft. Otherwise,
 	// we can become a leader of a cluster containing only this node.
+	// lyf: 在RemovePeer时，当前节点是否shutdown？什么场景
 	ShutdownOnRemove bool
 
 	// TrailingLogs controls how many logs we leave after a snapshot. This is used
 	// so that we can quickly replay logs on a follower instead of being forced to
 	// send an entire snapshot. The value passed here is the initial setting used.
 	// This can be tuned during operation using ReloadConfig.
+	// lyf: snapshot后，还留下几个logs
 	TrailingLogs uint64
 
 	// SnapshotInterval controls how often we check if we should perform a
@@ -190,49 +199,59 @@ type Config struct {
 	// the entire cluster from performing a snapshot at once. The value passed
 	// here is the initial setting used. This can be tuned during operation using
 	// ReloadConfig.
+	// lyf: snapshot的频率
 	SnapshotInterval time.Duration
 
 	// SnapshotThreshold controls how many outstanding logs there must be before
 	// we perform a snapshot. This is to prevent excessive snapshotting by
 	// replaying a small set of logs instead. The value passed here is the initial
 	// setting used. This can be tuned during operation using ReloadConfig.
+	// lyf: snapshot的阈值，有多少logs才进行
 	SnapshotThreshold uint64
 
 	// LeaderLeaseTimeout is used to control how long the "lease" lasts
 	// for being the leader without being able to contact a quorum
 	// of nodes. If we reach this interval without contact, we will
 	// step down as leader.
+	// lyf: 没有达到半数节点，也可以成为leader？？
 	LeaderLeaseTimeout time.Duration
 
 	// LocalID is a unique ID for this server across all time. When running with
 	// ProtocolVersion < 3, you must set this to be the same as the network
 	// address of your transport.
+	// lyf: localID，当协议<3时，需要和网络地址保持一致
 	LocalID ServerID
 
 	// NotifyCh is used to provide a channel that will be notified of leadership
 	// changes. Raft will block writing to this channel, so it should either be
 	// buffered or aggressively consumed.
+	// lyf: 该channel提供通知leader改变信息
 	NotifyCh chan<- bool
 
 	// LogOutput is used as a sink for logs, unless Logger is specified.
 	// Defaults to os.Stderr.
+	// lyf: 写日志？
 	LogOutput io.Writer
 
 	// LogLevel represents a log level. If the value does not match a known
 	// logging level hclog.NoLevel is used.
+	// lyf: 日志等级
 	LogLevel string
 
 	// Logger is a user-provided logger. If nil, a logger writing to
 	// LogOutput with LogLevel is used.
+	// lyf: 用户自定义的logger
 	Logger hclog.Logger
 
 	// NoSnapshotRestoreOnStart controls if raft will restore a snapshot to the
 	// FSM on start. This is useful if your FSM recovers from other mechanisms
 	// than raft snapshotting. Snapshot metadata will still be used to initialize
 	// raft's configuration and index values.
+	// lyf: 这个是不使用Snapshot启动吗？
 	NoSnapshotRestoreOnStart bool
 
 	// skipStartup allows NewRaft() to bypass all background work goroutines
+	// lyf: bypass后台协程？？
 	skipStartup bool
 }
 

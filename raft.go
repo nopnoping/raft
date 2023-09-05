@@ -166,6 +166,7 @@ func (r *Raft) runFollower() {
 	leaderAddr, leaderID := r.LeaderWithID()
 	r.logger.Info("entering follower state", "follower", r, "leader-address", leaderAddr, "leader-id", leaderID)
 	metrics.IncrCounter([]string{"raft", "state", "follower"}, 1)
+	// lyf: 心跳时间，如果在该时间内没有收到leader的消息，就会变为leader
 	heartbeatTimer := randomTimeout(r.config().HeartbeatTimeout)
 
 	for r.getState() == Follower {
@@ -219,10 +220,12 @@ func (r *Raft) runFollower() {
 		case <-heartbeatTimer:
 			r.mainThreadSaturation.working()
 			// Restart the heartbeat timer
+			// lyf: 重新启动心跳计时器
 			hbTimeout := r.config().HeartbeatTimeout
 			heartbeatTimer = randomTimeout(hbTimeout)
 
 			// Check if we have had a successful contact
+			// lyf: 看距离上次联系，是否超时
 			lastContact := r.LastContact()
 			if time.Since(lastContact) < hbTimeout {
 				continue

@@ -13,6 +13,7 @@ import (
 )
 
 // FSM is implemented by clients to make use of the replicated log.
+// lyf: 由具体的客户端来实现如何处理已经commit的log
 type FSM interface {
 	// Apply is called once a log entry is committed by a majority of the cluster.
 	//
@@ -20,6 +21,7 @@ type FSM interface {
 	// produce the same result on all peers in the cluster.
 	//
 	// The returned value is returned to the client as the ApplyFuture.Response.
+	// lyf: 执行commit log
 	Apply(*Log) interface{}
 
 	// Snapshot returns an FSMSnapshot used to: support log compaction, to
@@ -34,11 +36,13 @@ type FSM interface {
 	// Apply and Snapshot are always called from the same thread, but Apply will
 	// be called concurrently with FSMSnapshot.Persist. This means the FSM should
 	// be implemented to allow for concurrent updates while a snapshot is happening.
+	// lyf: 获取快照
 	Snapshot() (FSMSnapshot, error)
 
 	// Restore is used to restore an FSM from a snapshot. It is not called
 	// concurrently with any other command. The FSM must discard all previous
 	// state before restoring the snapshot.
+	// lyf: 使用快照进行恢复
 	Restore(snapshot io.ReadCloser) error
 }
 
@@ -80,6 +84,7 @@ type FSMSnapshot interface {
 func (r *Raft) runFSM() {
 	var lastIndex, lastTerm uint64
 
+	// lyf: 通过解析指针的方式，看是否client实现的是否支持该接口
 	batchingFSM, batchingEnabled := r.fsm.(BatchingFSM)
 	configStore, configStoreEnabled := r.fsm.(ConfigurationStore)
 
@@ -87,6 +92,8 @@ func (r *Raft) runFSM() {
 		// Apply the log if a command or config change
 		var resp interface{}
 		// Make sure we send a response
+		// lyf: 用defer来给future回复
+		// lyf: 这里defer后的是一个func，可以执行多个步骤
 		defer func() {
 			// Invoke the future if given
 			if req.future != nil {
@@ -98,6 +105,7 @@ func (r *Raft) runFSM() {
 		switch req.log.Type {
 		case LogCommand:
 			start := time.Now()
+			// lyf: 调用FSM的实现，执行log
 			resp = r.fsm.Apply(req.log)
 			metrics.MeasureSince([]string{"raft", "fsm", "apply"}, start)
 
@@ -118,8 +126,10 @@ func (r *Raft) runFSM() {
 		lastTerm = req.log.Term
 	}
 
+	// lyf: 批量的apply log
 	applyBatch := func(reqs []*commitTuple) {
 		if !batchingEnabled {
+			// lyf: 降级为单次执行
 			for _, ct := range reqs {
 				applySingle(ct)
 			}
@@ -128,6 +138,7 @@ func (r *Raft) runFSM() {
 
 		// Only send LogCommand and LogConfiguration log types. LogBarrier types
 		// will not be sent to the FSM.
+		// lyf: 判断该log是否需要执行
 		shouldSend := func(l *Log) bool {
 			switch l.Type {
 			case LogCommand, LogConfiguration:
@@ -138,6 +149,7 @@ func (r *Raft) runFSM() {
 
 		var lastBatchIndex, lastBatchTerm uint64
 		sendLogs := make([]*Log, 0, len(reqs))
+		// lyf: 把需要执行的log过滤出来
 		for _, req := range reqs {
 			if shouldSend(req.log) {
 				sendLogs = append(sendLogs, req.log)
@@ -147,6 +159,7 @@ func (r *Raft) runFSM() {
 		}
 
 		var responses []interface{}
+		// lyf: 调用client的批量接口执行
 		if len(sendLogs) > 0 {
 			start := time.Now()
 			responses = batchingFSM.ApplyBatch(sendLogs)
@@ -164,6 +177,7 @@ func (r *Raft) runFSM() {
 		lastTerm = lastBatchTerm
 
 		var i int
+		// lyf: 将resp传递给对应future
 		for _, req := range reqs {
 			var resp interface{}
 			// If the log was sent to the FSM, retrieve the response.
@@ -228,6 +242,7 @@ func (r *Raft) runFSM() {
 
 	saturation := newSaturationMetric([]string{"raft", "thread", "fsm", "saturation"}, 1*time.Second)
 
+	// lyf: 主流程
 	for {
 		saturation.sleeping()
 

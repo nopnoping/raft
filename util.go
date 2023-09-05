@@ -105,6 +105,8 @@ func asyncNotifyBool(ch chan bool, v bool) {
 // ch must be 1-item buffered channel.
 //
 // This method does not support multiple concurrent calls.
+// lyf: 传递值给一个channel，当里面有值时，会覆盖；
+// lyf: 只适用于一个缓冲区的channel；如果在覆写时，又被其他协程写入了，会爆并发错误
 func overrideNotifyBool(ch chan bool, v bool) {
 	select {
 	case ch <- v:

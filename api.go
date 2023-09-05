@@ -117,7 +117,7 @@ type Raft struct {
 	// snapshot and apply old logs to it that were in the pipe.
 	// lyf: fsm要apply时，使用该channel；为了解耦合？
 	// lyf: 当log被commit后，构造成commitTuple，来触发该log的apply
-	// lyf: 还有中情况，是来restore snapshot
+	// lyf: 还有种情况，是来restore snapshot
 	// lyf: 这里的interface{}才是真正的传递任何数据的
 	fsmMutateCh chan interface{}
 
@@ -140,6 +140,7 @@ type Raft struct {
 
 	// leaderCh is used to notify of leadership changes
 	// lyf: 该channel用来快速提醒node当前leader发生变化；算是一种优化？
+	// lyf: 给外界提供用于观测leader变化的channel
 	leaderCh chan bool
 
 	// leaderState used only while state is leader

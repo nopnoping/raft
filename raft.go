@@ -92,7 +92,7 @@ type leaderState struct {
 	commitCh chan struct{}
 	// lyf: 用来commit的结构
 	commitment *commitment
-	// lyf: 记录了待commit的logs
+	// lyf: 记录了待commit的logs；存储的是logFuture
 	inflight *list.List // list of logFuture in log index order
 	// lyf: 每个follower的同步类
 	replState map[ServerID]*followerReplication

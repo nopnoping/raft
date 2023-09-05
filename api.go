@@ -122,7 +122,8 @@ type Raft struct {
 	fsmMutateCh chan interface{}
 
 	// fsmSnapshotCh is used to trigger a new snapshot being taken
-	// lyf: fsm在snapshot的时候，解耦合？
+	// lyf: fsm在snapshot的channel，解耦合？
+	// lyf: 需要fsm执行snapshot时，向该channel发送future即可
 	fsmSnapshotCh chan *reqSnapshotFuture
 
 	// lastContact is the last time we had contact from the

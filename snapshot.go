@@ -77,11 +77,14 @@ type SnapshotSink interface {
 // runSnapshots is a long running goroutine used to manage taking
 // new snapshots of the FSM. It runs in parallel to the FSM and
 // main goroutines, so that snapshots do not block normal operation.
+// lyf: 执行snapshot的管理协程
 func (r *Raft) runSnapshots() {
 	for {
 		select {
+		// lyf: 定期snapshot
 		case <-randomTimeout(r.config().SnapshotInterval):
 			// Check if we should snapshot
+			// lyf: 检查是否可以进行snapshot
 			if !r.shouldSnapshot() {
 				continue
 			}
@@ -91,6 +94,7 @@ func (r *Raft) runSnapshots() {
 				r.logger.Error("failed to take snapshot", "error", err)
 			}
 
+		// lyf: 用户触发snapshot
 		case future := <-r.userSnapshotCh:
 			// User-triggered, run immediately
 			id, err := r.takeSnapshot()
@@ -111,6 +115,7 @@ func (r *Raft) runSnapshots() {
 
 // shouldSnapshot checks if we meet the conditions to take
 // a new snapshot.
+// lyf: 检查当前是否需要进行snapshot
 func (r *Raft) shouldSnapshot() bool {
 	// Check the last snapshot index
 	lastSnap, _ := r.getLastSnapshot()
@@ -124,12 +129,14 @@ func (r *Raft) shouldSnapshot() bool {
 
 	// Compare the delta to the threshold
 	delta := lastIdx - lastSnap
+	// lyf: 存储的log数，大于等于阈值，执行snapshot
 	return delta >= r.config().SnapshotThreshold
 }
 
 // takeSnapshot is used to take a new snapshot. This must only be called from
 // the snapshot thread, never the main thread. This returns the ID of the new
 // snapshot, along with an error.
+// lyf: 执行snapshot，并返回这个新snapshot的id
 func (r *Raft) takeSnapshot() (string, error) {
 	defer metrics.MeasureSince([]string{"raft", "snapshot", "takeSnapshot"}, time.Now())
 
@@ -138,6 +145,7 @@ func (r *Raft) takeSnapshot() (string, error) {
 	snapReq.init()
 
 	// Wait for dispatch or shutdown.
+	// lyf: 和fsm协程交互，获取fsmSnapshot
 	select {
 	case r.fsmSnapshotCh <- snapReq:
 	case <-r.shutdownCh:
@@ -151,11 +159,13 @@ func (r *Raft) takeSnapshot() (string, error) {
 		}
 		return "", err
 	}
+	// lyf: 使用defer释放fsmSnapshot对象
 	defer snapReq.snapshot.Release()
 
 	// Make a request for the configurations and extract the committed info.
 	// We have to use the future here to safely get this information since
 	// it is owned by the main thread.
+	// lyf: 为什么这里要设计为从main线程获取配置信息，而不是直接通过锁来读取？？
 	configReq := &configurationsFuture{}
 	configReq.ShutdownCh = r.shutdownCh
 	configReq.init()
@@ -178,12 +188,14 @@ func (r *Raft) takeSnapshot() (string, error) {
 	// application traffic flowing through the FSM. If there's none of that
 	// then it's not crucial that we snapshot, since there's not much going
 	// on Raft-wise.
+	// lyf: 和配置里的commitIndex比较？是干啥？没看懂？
 	if snapReq.index < committedIndex {
 		return "", fmt.Errorf("cannot take snapshot now, wait until the configuration entry at %v has been applied (have applied %v)",
 			committedIndex, snapReq.index)
 	}
 
 	// Create a new snapshot.
+	// lyf: 创建具体的snapshot；通过snapshot存储引擎
 	r.logger.Info("starting snapshot up to", "index", snapReq.index)
 	start := time.Now()
 	version := getSnapshotVersion(r.protocolVersion)
@@ -194,6 +206,7 @@ func (r *Raft) takeSnapshot() (string, error) {
 	metrics.MeasureSince([]string{"raft", "snapshot", "create"}, start)
 
 	// Try to persist the snapshot.
+	// lyf: 持久化
 	start = time.Now()
 	if err := snapReq.snapshot.Persist(sink); err != nil {
 		sink.Cancel()
@@ -210,6 +223,7 @@ func (r *Raft) takeSnapshot() (string, error) {
 	r.setLastSnapshot(snapReq.index, snapReq.term)
 
 	// Compact the logs.
+	// lyf: logs瘦身
 	if err := r.compactLogs(snapReq.index); err != nil {
 		return "", err
 	}

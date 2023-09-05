@@ -37,6 +37,9 @@ type FSM interface {
 	// be called concurrently with FSMSnapshot.Persist. This means the FSM should
 	// be implemented to allow for concurrent updates while a snapshot is happening.
 	// lyf: 获取快照
+	// lyf: 该方法要快速返回，因为apply和snapshot是在同一个协程中处理的，所以snapshot会阻塞apply
+	// lyf: 因此snapshot被设计为快速返回一个fsmSnapshot的方法，昂贵的io操作由fsmSnapshot执行
+	// lyf：apply和fsmSnapshot.Persist是并发的，因此fsm需要被设计为允许在snapshot时，依然在更新数据！！
 	Snapshot() (FSMSnapshot, error)
 
 	// Restore is used to restore an FSM from a snapshot. It is not called
@@ -221,6 +224,7 @@ func (r *Raft) runFSM() {
 		req.respond(nil)
 	}
 
+	// lyf: 调用fsm的Snapshot方法，快速返回
 	snapshot := func(req *reqSnapshotFuture) {
 		// Is there something to snapshot?
 		if lastIndex == 0 {
@@ -247,6 +251,7 @@ func (r *Raft) runFSM() {
 		saturation.sleeping()
 
 		select {
+		// lyf: apply log
 		case ptr := <-r.fsmMutateCh:
 			saturation.working()
 
@@ -262,6 +267,7 @@ func (r *Raft) runFSM() {
 				panic(fmt.Errorf("bad type passed to fsmMutateCh: %#v", ptr))
 			}
 
+		// lyf: take snapshot
 		case req := <-r.fsmSnapshotCh:
 			saturation.working()
 

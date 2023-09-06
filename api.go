@@ -528,28 +528,34 @@ func HasExistingState(logs LogStore, stable StableStore, snaps SnapshotStore) (b
 // as implementations of various interfaces that are required. If we have any
 // old state, such as snapshots, logs, peers, etc, all those will be restored
 // when creating the Raft node.
+// lyf: 创建一个raft节点
 func NewRaft(conf *Config, fsm FSM, logs LogStore, stable StableStore, snaps SnapshotStore, trans Transport) (*Raft, error) {
 	// Validate the configuration.
+	// lyf: 验证conf是否合法
 	if err := ValidateConfig(conf); err != nil {
 		return nil, err
 	}
 
 	// Ensure we have a LogOutput.
+	// lyf: 确保有logger
 	logger := conf.getOrCreateLogger()
 
 	// Try to restore the current term.
+	// lyf: 从stableStore中，获取之前存储的当前term
 	currentTerm, err := stable.GetUint64(keyCurrentTerm)
 	if err != nil && err.Error() != "not found" {
 		return nil, fmt.Errorf("failed to load current term: %v", err)
 	}
 
 	// Read the index of the last log entry.
+	// lyf: 从logStore中获取最后一个log的index
 	lastIndex, err := logs.LastIndex()
 	if err != nil {
 		return nil, fmt.Errorf("failed to find last log: %v", err)
 	}
 
 	// Get the last log entry.
+	// lyf: 获取最后一个log的信息
 	var lastLog Log
 	if lastIndex > 0 {
 		if err = logs.GetLog(lastIndex, &lastLog); err != nil {
@@ -564,11 +570,13 @@ func NewRaft(conf *Config, fsm FSM, logs LogStore, stable StableStore, snaps Sna
 
 	// TODO (slackpad) - When we deprecate protocol version 2, remove this
 	// along with the AddPeer() and RemovePeer() APIs.
+	// lyf: 低于version3时，id和addr需要相同
 	if protocolVersion < 3 && string(localID) != string(localAddr) {
 		return nil, fmt.Errorf("when running with ProtocolVersion < 3, LocalID must be set to the network address")
 	}
 
 	// Buffer applyCh to MaxAppendEntries if the option is enabled
+	// lyf: 配置applyCh的缓冲区
 	applyCh := make(chan *logFuture)
 	if conf.BatchApplyCh {
 		applyCh = make(chan *logFuture, conf.MaxAppendEntries)
@@ -615,11 +623,13 @@ func NewRaft(conf *Config, fsm FSM, logs LogStore, stable StableStore, snaps Sna
 	r.setLastLog(lastLog.Index, lastLog.Term)
 
 	// Attempt to restore a snapshot if there are any.
+	// lyf: 尝试恢复snapshot
 	if err := r.restoreSnapshot(); err != nil {
 		return nil, err
 	}
 
 	// Scan through the log for any configuration change entries.
+	// lyf: 处理configuration log
 	snapshotIndex, _ := r.getLastSnapshot()
 	for index := snapshotIndex + 1; index <= lastLog.Index; index++ {
 		var entry Log
@@ -638,12 +648,15 @@ func NewRaft(conf *Config, fsm FSM, logs LogStore, stable StableStore, snaps Sna
 	// Setup a heartbeat fast-path to avoid head-of-line
 	// blocking where possible. It MUST be safe for this
 	// to be called concurrently with a blocking RPC.
+	// lyf: 让传输层快速处理心跳？
 	trans.SetHeartbeatHandler(r.processHeartbeat)
 
+	// lyf: 是否要启动
 	if conf.skipStartup {
 		return r, nil
 	}
 	// Start the background work.
+	// lyf: 启动主流程、fsm、snapshot
 	r.goFunc(r.run)
 	r.goFunc(r.runFSM)
 	r.goFunc(r.runSnapshots)

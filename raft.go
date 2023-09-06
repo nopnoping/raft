@@ -1569,6 +1569,7 @@ func (r *Raft) appendEntries(rpc RPC, a *AppendEntriesRequest) {
 // processConfigurationLogEntry takes a log entry and updates the latest
 // configuration if the entry results in a new configuration. This must only be
 // called from the main thread, or from NewRaft() before any threads have begun.
+// lyf: 处理logs中记录configuration的日志
 func (r *Raft) processConfigurationLogEntry(entry *Log) error {
 	switch entry.Type {
 	case LogConfiguration:

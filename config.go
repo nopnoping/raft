@@ -341,6 +341,7 @@ func DefaultConfig() *Config {
 }
 
 // ValidateConfig is used to validate a sane configuration
+// lyf: 验证配置是否正确
 func ValidateConfig(config *Config) error {
 	// We don't actually support running as 0 in the library any more, but
 	// we do understand it.

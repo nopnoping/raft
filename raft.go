@@ -235,11 +235,13 @@ func (r *Raft) runFollower() {
 			lastLeaderAddr, lastLeaderID := r.LeaderWithID()
 			r.setLeader("", "")
 
+			// lyf: 没有获得集群信息，无法进行选举
 			if r.configurations.latestIndex == 0 {
 				if !didWarn {
 					r.logger.Warn("no known peers, aborting election")
 					didWarn = true
 				}
+				// lyf: 最近的配置已经提交，查看当前是否有选举权
 			} else if r.configurations.latestIndex == r.configurations.committedIndex &&
 				!hasVote(r.configurations.latest, r.localID) {
 				if !didWarn {
@@ -248,6 +250,7 @@ func (r *Raft) runFollower() {
 				}
 			} else {
 				metrics.IncrCounter([]string{"raft", "transition", "heartbeat_timeout"}, 1)
+				// lyf: 有选举权，成为candidate
 				if hasVote(r.configurations.latest, r.localID) {
 					r.logger.Warn("heartbeat timeout reached, starting election", "last-leader-addr", lastLeaderAddr, "last-leader-id", lastLeaderID)
 					r.setState(Candidate)
@@ -741,6 +744,7 @@ func (r *Raft) leaderLoop() {
 			// New configuration has been committed, set it as the committed
 			// value.
 			// lyf: 配置？？
+			// lyf: 配置信息也是记录在log中的？因此如果提交的log是配置信息的话，就需要去更新已提交的commit
 			if r.configurations.latestIndex > oldCommitIndex &&
 				r.configurations.latestIndex <= commitIndex {
 				r.setCommittedConfiguration(r.configurations.latest, r.configurations.latestIndex)

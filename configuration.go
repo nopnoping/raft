@@ -12,9 +12,11 @@ type ServerSuffrage int
 const (
 	// Voter is a server whose vote is counted in elections and whose match index
 	// is used in advancing the leader's commit index.
+	// lyf: 可以选举
 	Voter ServerSuffrage = iota
 	// Nonvoter is a server that receives log entries but is not considered for
 	// elections or commitment purposes.
+	// lyf: 不可以选举，相当于observer
 	Nonvoter
 	// Staging is a server that acts like a Nonvoter. A configuration change
 	// with a ConfigurationChangeCommand of Promote can change a Staging server
@@ -63,12 +65,16 @@ type ServerID string
 type ServerAddress string
 
 // Server tracks the information about a single server in a configuration.
+// lyf: 记录每个server在配置中的信息
 type Server struct {
 	// Suffrage determines whether the server gets a vote.
+	// lyf: 该server是否可以选举
 	Suffrage ServerSuffrage
 	// ID is a unique string identifying this server for all time.
+	// lyf: serverId
 	ID ServerID
 	// Address is its network address that a transport can contact.
+	// lyf: 网络地址
 	Address ServerAddress
 }
 
@@ -148,16 +154,22 @@ type configurationChangeRequest struct {
 // snapshot. We disallow snapshots in that case now. An alternative approach,
 // which LogCabin uses, is to track every configuration change in the
 // log.
+// lyf: 配置，记录了两个configuration；为啥记录两个，没看懂
+// lyf: 主要记录当前各个节点是否拥有选举权
 type configurations struct {
 	// committed is the latest configuration in the log/snapshot that has been
 	// committed (the one with the largest index).
+	// lyf: 在log/snapshot中已经被提交的最近的配置
 	committed Configuration
 	// committedIndex is the log index where 'committed' was written.
+	// lyf: 提交log的index
 	committedIndex uint64
 	// latest is the latest configuration in the log/snapshot (may be committed
 	// or uncommitted)
+	// lyf: 记录了最近的，可能是uncommitted状态
 	latest Configuration
 	// latestIndex is the log index where 'latest' was written.
+	// lyf: log的index
 	latestIndex uint64
 }
 

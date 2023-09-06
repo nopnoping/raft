@@ -138,9 +138,12 @@ func (r *Raft) requestConfigChange(req configurationChangeRequest, timeout time.
 }
 
 // run the main thread that handles leadership and RPC requests.
+// lyf: 主线程，负责处理raft协议的角色变化以及rpc请求
 func (r *Raft) run() {
 	for {
 		// Check if we are doing a shutdown
+		// lyf: 通过shutdownCh实现线程退出功能
+		// lyf: 每个state的流程里，也会case该channel，但是其只是结束state的流程，而不会结束主线程
 		select {
 		case <-r.shutdownCh:
 			// Clear the leader to prevent forwarding
@@ -149,6 +152,7 @@ func (r *Raft) run() {
 		default:
 		}
 
+		// lyf: 根据不同的State，执行不同的流程
 		switch r.getState() {
 		case Follower:
 			r.runFollower()
@@ -161,52 +165,64 @@ func (r *Raft) run() {
 }
 
 // runFollower runs the main loop while in the follower state.
+// lyf: follower的主流程
 func (r *Raft) runFollower() {
+	// lyf: 用于打印警告，为什么最开始是false
 	didWarn := false
+	// lyf: 获取leader的地址和id
 	leaderAddr, leaderID := r.LeaderWithID()
 	r.logger.Info("entering follower state", "follower", r, "leader-address", leaderAddr, "leader-id", leaderID)
 	metrics.IncrCounter([]string{"raft", "state", "follower"}, 1)
 	// lyf: 心跳时间，如果在该时间内没有收到leader的消息，就会变为leader
 	heartbeatTimer := randomTimeout(r.config().HeartbeatTimeout)
 
+	// lyf: for + select是go里常用的循环+阻塞方式
 	for r.getState() == Follower {
 		r.mainThreadSaturation.sleeping()
 
 		select {
+		// lyf: 处理rpc
 		case rpc := <-r.rpcCh:
 			r.mainThreadSaturation.working()
 			r.processRPC(rpc)
 
+		// lyf: 当前是follower，不能更改配置，因此直接回复future error
 		case c := <-r.configurationChangeCh:
 			r.mainThreadSaturation.working()
 			// Reject any operations since we are not the leader
 			c.respond(ErrNotLeader)
 
+		// lyf: 不能处理，回复future
 		case a := <-r.applyCh:
 			r.mainThreadSaturation.working()
 			// Reject any operations since we are not the leader
 			a.respond(ErrNotLeader)
 
+		// lyf: 不能处理，回复future
 		case v := <-r.verifyCh:
 			r.mainThreadSaturation.working()
 			// Reject any operations since we are not the leader
 			v.respond(ErrNotLeader)
 
+		// lyf: 不能处理，回复future
 		case ur := <-r.userRestoreCh:
 			r.mainThreadSaturation.working()
 			// Reject any restores since we are not the leader
 			ur.respond(ErrNotLeader)
 
+		// lyf: 不能处理，回复future
 		case l := <-r.leadershipTransferCh:
 			r.mainThreadSaturation.working()
 			// Reject any operations since we are not the leader
 			l.respond(ErrNotLeader)
 
+		// lyf: 获取当前的configurations信息
 		case c := <-r.configurationsCh:
 			r.mainThreadSaturation.working()
 			c.configurations = r.configurations.Clone()
 			c.respond(nil)
 
+		// lyf: 启动节点，加载cluster信息
 		case b := <-r.bootstrapCh:
 			r.mainThreadSaturation.working()
 			b.respond(r.liveBootstrap(b.configuration))
@@ -214,6 +230,7 @@ func (r *Raft) runFollower() {
 		case <-r.leaderNotifyCh:
 			//  Ignore since we are not the leader
 
+		// lyf: 立刻唤醒follower进行选举？
 		case <-r.followerNotifyCh:
 			heartbeatTimer = time.After(0)
 
@@ -235,7 +252,7 @@ func (r *Raft) runFollower() {
 			lastLeaderAddr, lastLeaderID := r.LeaderWithID()
 			r.setLeader("", "")
 
-			// lyf: 没有获得集群信息，无法进行选举
+			// lyf: 还没有bootstrap不能进行选举；即没有configurations信息
 			if r.configurations.latestIndex == 0 {
 				if !didWarn {
 					r.logger.Warn("no known peers, aborting election")
@@ -270,6 +287,7 @@ func (r *Raft) runFollower() {
 // liveBootstrap attempts to seed an initial configuration for the cluster. See
 // the Raft object's member BootstrapCluster for more details. This must only be
 // called on the main thread, and only makes sense in the follower state.
+// lyf: 加载configuration信息
 func (r *Raft) liveBootstrap(configuration Configuration) error {
 	if !hasVote(configuration, r.localID) {
 		// Reject this operation since we are not a voter
@@ -1377,12 +1395,14 @@ func (r *Raft) prepareLog(l *Log, future *logFuture) *commitTuple {
 
 // processRPC is called to handle an incoming RPC request. This must only be
 // called from the main thread.
+// lyf: 处理rpc
 func (r *Raft) processRPC(rpc RPC) {
 	if err := r.checkRPCHeader(rpc); err != nil {
 		rpc.Respond(nil, err)
 		return
 	}
 
+	// lyf: 根据不同的rpc方法名，执行不同的处理
 	switch cmd := rpc.Command.(type) {
 	case *AppendEntriesRequest:
 		r.appendEntries(rpc, cmd)
@@ -1424,9 +1444,11 @@ func (r *Raft) processHeartbeat(rpc RPC) {
 
 // appendEntries is invoked when we get an append entries RPC call. This must
 // only be called from the main thread.
+// lyf: 处理AppendEntries请求
 func (r *Raft) appendEntries(rpc RPC, a *AppendEntriesRequest) {
 	defer metrics.MeasureSince([]string{"raft", "rpc", "appendEntries"}, time.Now())
 	// Setup a response
+	// lyf: 设置resp
 	resp := &AppendEntriesResponse{
 		RPCHeader:      r.getRPCHeader(),
 		Term:           r.getCurrentTerm(),
@@ -1440,12 +1462,16 @@ func (r *Raft) appendEntries(rpc RPC, a *AppendEntriesRequest) {
 	}()
 
 	// Ignore an older term
+	// lyf: 检查term
 	if a.Term < r.getCurrentTerm() {
 		return
 	}
 
 	// Increase the term if we see a newer one, also transition to follower
 	// if we ever get an appendEntries call
+	// lyf: 如果term大于当前值；非follower需要变为follower
+	// lyf: term相等的话，不可能是leader，否则就是脑裂,
+	// lyf: 因此这个状态判断改为r.getState == Candidate && !r.candidateFromLeadershipTransfer是否更清晰
 	if a.Term > r.getCurrentTerm() || (r.getState() != Follower && !r.candidateFromLeadershipTransfer) {
 		// Ensure transition to follower
 		r.setState(Follower)

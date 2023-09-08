@@ -65,6 +65,7 @@ type AppendEntriesResponse struct {
 
 	// There are scenarios where this request didn't succeed
 	// but there's no need to wait/back-off the next attempt.
+	// lyf: 失败后，是否需要back-off
 	NoRetryBackoff bool
 }
 

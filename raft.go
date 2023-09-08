@@ -1480,15 +1480,18 @@ func (r *Raft) appendEntries(rpc RPC, a *AppendEntriesRequest) {
 	}
 
 	// Save the current leader
+	// lyf: 存储leader的地址；else这个是为了兼容？·
 	if len(a.Addr) > 0 {
 		r.setLeader(r.trans.DecodePeer(a.Addr), ServerID(a.ID))
 	} else {
 		r.setLeader(r.trans.DecodePeer(a.Leader), ServerID(a.ID))
 	}
 	// Verify the last log entry
+	// lyf: 验证prvLog，如果小于等于零
 	if a.PrevLogEntry > 0 {
 		lastIdx, lastTerm := r.getLastEntry()
 
+		// lyf: 获取prvLog的term
 		var prevLogTerm uint64
 		if a.PrevLogEntry == lastIdx {
 			prevLogTerm = lastTerm
@@ -1499,12 +1502,14 @@ func (r *Raft) appendEntries(rpc RPC, a *AppendEntriesRequest) {
 					"previous-index", a.PrevLogEntry,
 					"last-index", lastIdx,
 					"error", err)
+				// lyf: 失败后不用back-off
 				resp.NoRetryBackoff = true
 				return
 			}
 			prevLogTerm = prevLog.Term
 		}
 
+		// lyf: 验证term是否相等
 		if a.PrevLogTerm != prevLogTerm {
 			r.logger.Warn("previous log term mis-match",
 				"ours", prevLogTerm,
@@ -1515,6 +1520,7 @@ func (r *Raft) appendEntries(rpc RPC, a *AppendEntriesRequest) {
 	}
 
 	// Process any new entries
+	// lyf: 验证通过，处理请求中的entries
 	if len(a.Entries) > 0 {
 		start := time.Now()
 
@@ -1522,6 +1528,8 @@ func (r *Raft) appendEntries(rpc RPC, a *AppendEntriesRequest) {
 		lastLogIdx, _ := r.getLastLog()
 		var newEntries []*Log
 		for i, entry := range a.Entries {
+			// lyf: 遍历的entry已经大于当最后的logIdx；
+			// lyf: 表明前面的都是相同的，因此可以直接从entry中获取新的log
 			if entry.Index > lastLogIdx {
 				newEntries = a.Entries[i:]
 				break
@@ -1533,12 +1541,14 @@ func (r *Raft) appendEntries(rpc RPC, a *AppendEntriesRequest) {
 					"error", err)
 				return
 			}
+			// lyf: term不相同，则表明log不同
 			if entry.Term != storeEntry.Term {
 				r.logger.Warn("clearing log suffix", "from", entry.Index, "to", lastLogIdx)
 				if err := r.logs.DeleteRange(entry.Index, lastLogIdx); err != nil {
 					r.logger.Error("failed to clear log suffix", "error", err)
 					return
 				}
+				// lyf: 这里为什么要更新configurations？
 				if entry.Index <= r.configurations.latestIndex {
 					r.setLatestConfiguration(r.configurations.committed, r.configurations.committedIndex)
 				}
@@ -1549,6 +1559,7 @@ func (r *Raft) appendEntries(rpc RPC, a *AppendEntriesRequest) {
 
 		if n := len(newEntries); n > 0 {
 			// Append the new entries
+			// lyf: 存储logs
 			if err := r.logs.StoreLogs(newEntries); err != nil {
 				r.logger.Error("failed to append to logs", "error", err)
 				// TODO: leaving r.getLastLog() in the wrong
@@ -1557,6 +1568,7 @@ func (r *Raft) appendEntries(rpc RPC, a *AppendEntriesRequest) {
 			}
 
 			// Handle any new configuration changes
+			// lyf: 处理configurationLog
 			for _, newEntry := range newEntries {
 				if err := r.processConfigurationLogEntry(newEntry); err != nil {
 					r.logger.Warn("failed to append entry",
@@ -1568,6 +1580,7 @@ func (r *Raft) appendEntries(rpc RPC, a *AppendEntriesRequest) {
 			}
 
 			// Update the lastLog
+			// lyf: 更新lastIndex和lastTerm
 			last := newEntries[n-1]
 			r.setLastLog(last.Index, last.Term)
 		}
@@ -1576,13 +1589,16 @@ func (r *Raft) appendEntries(rpc RPC, a *AppendEntriesRequest) {
 	}
 
 	// Update the commit index
+	// lyf: 更新commit信息
 	if a.LeaderCommitIndex > 0 && a.LeaderCommitIndex > r.getCommitIndex() {
 		start := time.Now()
 		idx := min(a.LeaderCommitIndex, r.getLastIndex())
 		r.setCommitIndex(idx)
+		// lyf: 如果last configurations提交了，则更新committed configuration
 		if r.configurations.latestIndex <= idx {
 			r.setCommittedConfiguration(r.configurations.latest, r.configurations.latestIndex)
 		}
+		// lyf: 执行logs；这里future为nil
 		r.processLogs(idx, nil)
 		metrics.MeasureSince([]string{"raft", "rpc", "appendEntries", "processLogs"}, start)
 	}
@@ -1614,8 +1630,11 @@ func (r *Raft) processConfigurationLogEntry(entry *Log) error {
 }
 
 // requestVote is invoked when we get a request vote RPC call.
+// lyf: 处理requestVote请求
 func (r *Raft) requestVote(rpc RPC, req *RequestVoteRequest) {
 	defer metrics.MeasureSince([]string{"raft", "rpc", "requestVote"}, time.Now())
+	// lyf: 给每个observer发送一个观察信息
+	// lyf: 有啥用？？
 	r.observe(*req)
 
 	// Setup a response

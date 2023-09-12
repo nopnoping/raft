@@ -9,10 +9,12 @@ import (
 )
 
 // Observation is sent along the given channel to observers when an event occurs.
+// lyf: Observation结构体提供详细的观察描述
 type Observation struct {
 	// Raft holds the Raft instance generating the observation.
 	Raft *Raft
 	// Data holds observation-specific data. Possible types are
+	// lyf: 支持的数据，看上去就是rpc请求类型
 	// RequestVoteRequest
 	// RaftState
 	// PeerObservation
@@ -55,25 +57,32 @@ var nextObserverID uint64
 type FilterFn func(o *Observation) bool
 
 // Observer describes what to do with a given observation.
+// lyf: Observer结构体，用来描述给定观察
+// lyf: observer是干啥的？
 type Observer struct {
 	// numObserved and numDropped are performance counters for this observer.
 	// 64 bit types must be 64 bit aligned to use with atomic operations on
 	// 32 bit platforms, so keep them at the top of the struct.
+	// lyf: observers在使用和被抛弃的数量
 	numObserved uint64
 	numDropped  uint64
 
 	// channel receives observations.
+	// lyf: 获取观察信息？
 	channel chan Observation
 
 	// blocking, if true, will cause Raft to block when sending an observation
 	// to this observer. This should generally be set to false.
+	// lyf: 阻塞
 	blocking bool
 
 	// filter will be called to determine if an observation should be sent to
 	// the channel.
+	// lyf: 过滤，决定这个观察是否发送给channel
 	filter FilterFn
 
 	// id is the ID of this observer in the Raft map.
+	// lyf: observer的id
 	id uint64
 }
 
@@ -118,26 +127,34 @@ func (r *Raft) DeregisterObserver(or *Observer) {
 }
 
 // observe sends an observation to every observer.
+// lyf: 给每一个observer发送一个信息
 func (r *Raft) observe(o interface{}) {
 	// In general observers should not block. But in any case this isn't
 	// disastrous as we only hold a read lock, which merely prevents
 	// registration / deregistration of observers.
+	// lyf: 获取读锁
+	// lyf: 为什么说通常不获取？
 	r.observersLock.RLock()
 	defer r.observersLock.RUnlock()
 	for _, or := range r.observers {
 		// It's wasteful to do this in the loop, but for the common case
 		// where there are no observers we won't create any objects.
+		// lyf: 构造观察描述
 		ob := Observation{Raft: r, Data: o}
+		// lyf: 过滤
 		if or.filter != nil && !or.filter(&ob) {
 			continue
 		}
 		if or.channel == nil {
 			continue
 		}
+		// lyf: 看是否阻塞
 		if or.blocking {
+			// lyf: 阻塞，直到发送成功
 			or.channel <- ob
 			atomic.AddUint64(&or.numObserved, 1)
 		} else {
+			// lyf: 非阻塞，不能发送就drop
 			select {
 			case or.channel <- ob:
 				atomic.AddUint64(&or.numObserved, 1)

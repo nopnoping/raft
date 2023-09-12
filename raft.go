@@ -1635,9 +1635,11 @@ func (r *Raft) requestVote(rpc RPC, req *RequestVoteRequest) {
 	defer metrics.MeasureSince([]string{"raft", "rpc", "requestVote"}, time.Now())
 	// lyf: 给每个observer发送一个观察信息
 	// lyf: 有啥用？？
+	// lyf: 看上去就是一个debug信息
 	r.observe(*req)
 
 	// Setup a response
+	// lyf: 建立请求信息
 	resp := &RequestVoteResponse{
 		RPCHeader: r.getRPCHeader(),
 		Term:      r.getCurrentTerm(),
@@ -1658,6 +1660,7 @@ func (r *Raft) requestVote(rpc RPC, req *RequestVoteRequest) {
 	// check the LeadershipTransfer flag is set. Usually votes are rejected if
 	// there is a known leader. But if the leader initiated a leadership transfer,
 	// vote!
+	// lyf: 获取candidate信息
 	var candidate ServerAddress
 	var candidateBytes []byte
 	if len(req.RPCHeader.Addr) > 0 {
@@ -1674,12 +1677,15 @@ func (r *Raft) requestVote(rpc RPC, req *RequestVoteRequest) {
 		candidateID := ServerID(req.ID)
 		// if the Servers list is empty that mean the cluster is very likely trying to bootstrap,
 		// Grant the vote
+		// lyf: 如果candidateId没有在配置中，则拒绝
 		if len(r.configurations.latest.Servers) > 0 && !inConfiguration(r.configurations.latest, candidateID) {
 			r.logger.Warn("rejecting vote request since node is not in configuration",
 				"from", candidate)
 			return
 		}
 	}
+	// lyf: 校验当前是否有leader
+	// lyf: 有趣的是，如果当前有，并且不是candidate，那么就要看这个请求是否是因为leaderShipTransfer引起的
 	if leaderAddr, leaderID := r.LeaderWithID(); leaderAddr != "" && leaderAddr != candidate && !req.LeadershipTransfer {
 		r.logger.Warn("rejecting vote request since we have a leader",
 			"from", candidate,
@@ -1689,11 +1695,13 @@ func (r *Raft) requestVote(rpc RPC, req *RequestVoteRequest) {
 	}
 
 	// Ignore an older term
+	// lyf: Term小，拒绝
 	if req.Term < r.getCurrentTerm() {
 		return
 	}
 
 	// Increase the term if we see a newer one
+	// lyf: 更大的Term，更新，并退化为follower
 	if req.Term > r.getCurrentTerm() {
 		// Ensure transition to follower
 		r.logger.Debug("lost leadership because received a requestVote with a newer term")
@@ -1707,6 +1715,7 @@ func (r *Raft) requestVote(rpc RPC, req *RequestVoteRequest) {
 	// This could happen when a node, previously voter, is converted to non-voter
 	// The reason we need to step in is to permit to the cluster to make progress in such a scenario
 	// More details about that in https://github.com/hashicorp/raft/pull/526
+	// lyf: 之前是voter，但是现在不是voter了，那么只是更新term，而不会给它投票
 	if len(req.ID) > 0 {
 		candidateID := ServerID(req.ID)
 		if len(r.configurations.latest.Servers) > 0 && !hasVote(r.configurations.latest, candidateID) {
@@ -1715,11 +1724,13 @@ func (r *Raft) requestVote(rpc RPC, req *RequestVoteRequest) {
 		}
 	}
 	// Check if we have voted yet
+	// lyf: 获取最后一次投票的term
 	lastVoteTerm, err := r.stable.GetUint64(keyLastVoteTerm)
 	if err != nil && err.Error() != "not found" {
 		r.logger.Error("failed to get last vote term", "error", err)
 		return
 	}
+	// lyf: 获取最后一次投票的数据
 	lastVoteCandBytes, err := r.stable.Get(keyLastVoteCand)
 	if err != nil && err.Error() != "not found" {
 		r.logger.Error("failed to get last vote candidate", "error", err)
@@ -1727,6 +1738,7 @@ func (r *Raft) requestVote(rpc RPC, req *RequestVoteRequest) {
 	}
 
 	// Check if we've voted in this election before
+	// lyf: 如果已经投过了，只对同一个candidate投票
 	if lastVoteTerm == req.Term && lastVoteCandBytes != nil {
 		r.logger.Info("duplicate requestVote for same term", "term", req.Term)
 		if bytes.Equal(lastVoteCandBytes, candidateBytes) {
@@ -1737,6 +1749,7 @@ func (r *Raft) requestVote(rpc RPC, req *RequestVoteRequest) {
 	}
 
 	// Reject if their term is older
+	// lyf: 检查term是不是最新的
 	lastIdx, lastTerm := r.getLastEntry()
 	if lastTerm > req.LastLogTerm {
 		r.logger.Warn("rejecting vote request since our last term is greater",
@@ -1755,6 +1768,7 @@ func (r *Raft) requestVote(rpc RPC, req *RequestVoteRequest) {
 	}
 
 	// Persist a vote for safety
+	// lyf: 持久化投票数数
 	if err := r.persistVote(req.Term, candidateBytes); err != nil {
 		r.logger.Error("failed to persist vote", "error", err)
 		return

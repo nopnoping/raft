@@ -1782,9 +1782,11 @@ func (r *Raft) requestVote(rpc RPC, req *RequestVoteRequest) {
 // We must be in the follower state for this, since it means we are
 // too far behind a leader for log replay. This must only be called
 // from the main thread.
+// lyf: 处理installSnapshot请求
 func (r *Raft) installSnapshot(rpc RPC, req *InstallSnapshotRequest) {
 	defer metrics.MeasureSince([]string{"raft", "rpc", "installSnapshot"}, time.Now())
 	// Setup a response
+	// lyf: 创建resp
 	resp := &InstallSnapshotResponse{
 		Term:    r.getCurrentTerm(),
 		Success: false,
@@ -1796,6 +1798,7 @@ func (r *Raft) installSnapshot(rpc RPC, req *InstallSnapshotRequest) {
 	}()
 
 	// Sanity check the version
+	// lyf: 检查snapshot版本
 	if req.SnapshotVersion < SnapshotVersionMin ||
 		req.SnapshotVersion > SnapshotVersionMax {
 		rpcErr = fmt.Errorf("unsupported snapshot version %d", req.SnapshotVersion)
@@ -1803,6 +1806,7 @@ func (r *Raft) installSnapshot(rpc RPC, req *InstallSnapshotRequest) {
 	}
 
 	// Ignore an older term
+	// lyf: 检查term
 	if req.Term < r.getCurrentTerm() {
 		r.logger.Info("ignoring installSnapshot request with older term than current term",
 			"request-term", req.Term,
@@ -1811,6 +1815,7 @@ func (r *Raft) installSnapshot(rpc RPC, req *InstallSnapshotRequest) {
 	}
 
 	// Increase the term if we see a newer one
+	// lyf: 比当前大，则更新
 	if req.Term > r.getCurrentTerm() {
 		// Ensure transition to follower
 		r.setState(Follower)
@@ -1819,6 +1824,7 @@ func (r *Raft) installSnapshot(rpc RPC, req *InstallSnapshotRequest) {
 	}
 
 	// Save the current leader
+	// lyf: 保持leader信息
 	if len(req.ID) > 0 {
 		r.setLeader(r.trans.DecodePeer(req.RPCHeader.Addr), ServerID(req.ID))
 	} else {
@@ -1826,6 +1832,7 @@ func (r *Raft) installSnapshot(rpc RPC, req *InstallSnapshotRequest) {
 	}
 
 	// Create a new snapshot
+	// lyf: 获取配置信息？
 	var reqConfiguration Configuration
 	var reqConfigurationIndex uint64
 	if req.SnapshotVersion > 0 {
@@ -1840,6 +1847,7 @@ func (r *Raft) installSnapshot(rpc RPC, req *InstallSnapshotRequest) {
 		reqConfigurationIndex = req.LastLogIndex
 	}
 	version := getSnapshotVersion(r.protocolVersion)
+	// lyf: 创建snapshot
 	sink, err := r.snapshots.Create(version, req.LastLogIndex, req.LastLogTerm,
 		reqConfiguration, reqConfigurationIndex, r.trans)
 	if err != nil {
@@ -1850,11 +1858,16 @@ func (r *Raft) installSnapshot(rpc RPC, req *InstallSnapshotRequest) {
 
 	// Separately track the progress of streaming a snapshot over the network
 	// because this too can take a long time.
+	// lyf: 单独处理网络中的snapshot信息
+	// lyf: 因为snapshot信息可能很大，获取会花很长的时间
 	countingRPCReader := newCountingReader(rpc.Reader)
 
 	// Spill the remote snapshot to disk
+	// lyf: 这个是监控吗？？
 	transferMonitor := startSnapshotRestoreMonitor(r.logger, countingRPCReader, req.Size, true)
+	// lyf: 将数据复制到sink中
 	n, err := io.Copy(sink, countingRPCReader)
+	// lyf: 等待复制完成？
 	transferMonitor.StopAndWait()
 	if err != nil {
 		sink.Cancel()
@@ -1864,6 +1877,7 @@ func (r *Raft) installSnapshot(rpc RPC, req *InstallSnapshotRequest) {
 	}
 
 	// Check that we received it all
+	// lyf: 检查数据完整性
 	if n != req.Size {
 		sink.Cancel()
 		r.logger.Error("failed to receive whole snapshot",
@@ -1873,6 +1887,7 @@ func (r *Raft) installSnapshot(rpc RPC, req *InstallSnapshotRequest) {
 	}
 
 	// Finalize the snapshot
+	// lyf: 关闭sink
 	if err := sink.Close(); err != nil {
 		r.logger.Error("failed to finalize snapshot", "error", err)
 		rpcErr = err
@@ -1881,6 +1896,7 @@ func (r *Raft) installSnapshot(rpc RPC, req *InstallSnapshotRequest) {
 	r.logger.Info("copied to local snapshot", "bytes", n)
 
 	// Restore snapshot
+	// lyf: restore这个新的snapshot
 	future := &restoreFuture{ID: sink.ID()}
 	future.ShutdownCh = r.shutdownCh
 	future.init()
@@ -1899,17 +1915,22 @@ func (r *Raft) installSnapshot(rpc RPC, req *InstallSnapshotRequest) {
 	}
 
 	// Update the lastApplied so we don't replay old logs
+	// lyf: 更新最后applied的index
 	r.setLastApplied(req.LastLogIndex)
 
 	// Update the last stable snapshot info
+	// lyf: 更新snapshot的index、term
 	r.setLastSnapshot(req.LastLogIndex, req.LastLogTerm)
 
 	// Restore the peer set
+	// lyf: 更新配置
 	r.setLatestConfiguration(reqConfiguration, reqConfigurationIndex)
 	r.setCommittedConfiguration(reqConfiguration, reqConfigurationIndex)
 
 	// Clear old logs if r.logs is a MonotonicLogStore. Otherwise compact the
 	// logs. In both cases, log any errors and continue.
+	// lyf: 清除旧的log
+	// lyf: MonotonicLogStore是一个可选的logStore实现
 	if mlogs, ok := r.logs.(MonotonicLogStore); ok && mlogs.IsMonotonic() {
 		if err := r.removeOldLogs(); err != nil {
 			r.logger.Error("failed to reset logs", "error", err)

@@ -50,24 +50,29 @@ type SnapshotMeta struct {
 // of snapshot storage and retrieval. For example, a client could implement
 // a shared state store such as S3, allowing new nodes to restore snapshots
 // without streaming from the leader.
+// lyf: snapshotStore接口定义了snapShot的存储和获取行为，可以由client根据自己的需求来实现
 type SnapshotStore interface {
 	// Create is used to begin a snapshot at a given index and term, and with
 	// the given committed configuration. The version parameter controls
 	// which snapshot version to create.
+	// lyf: 创建一个snapshot，用所提供的index、term、configuration
 	Create(version SnapshotVersion, index, term uint64, configuration Configuration,
 		configurationIndex uint64, trans Transport) (SnapshotSink, error)
 
 	// List is used to list the available snapshots in the store.
 	// It should return then in descending order, with the highest index first.
+	// lyf: 列出当前存储的所有snapshot
 	List() ([]*SnapshotMeta, error)
 
 	// Open takes a snapshot ID and provides a ReadCloser. Once close is
 	// called it is assumed the snapshot is no longer needed.
+	// lyf: 打开一个snapshot，会提供一个ReadCloser，当它关闭了，就认为该snapshot不需要了
 	Open(id string) (*SnapshotMeta, io.ReadCloser, error)
 }
 
 // SnapshotSink is returned by StartSnapshot. The FSM will Write state
 // to the sink and call Close on completion. On error, Cancel will be invoked.
+// lyf: snapshotSink提供了state写的功能
 type SnapshotSink interface {
 	io.WriteCloser
 	ID() string
@@ -199,6 +204,7 @@ func (r *Raft) takeSnapshot() (string, error) {
 	r.logger.Info("starting snapshot up to", "index", snapReq.index)
 	start := time.Now()
 	version := getSnapshotVersion(r.protocolVersion)
+	// lyf: 创建snapShotSink，这样就可以调用FSMSnapshot的persist
 	sink, err := r.snapshots.Create(version, snapReq.index, snapReq.term, committed, committedIndex, r.trans)
 	if err != nil {
 		return "", fmt.Errorf("failed to create snapshot: %v", err)
@@ -215,6 +221,7 @@ func (r *Raft) takeSnapshot() (string, error) {
 	metrics.MeasureSince([]string{"raft", "snapshot", "persist"}, start)
 
 	// Close and check for error.
+	// lyf: 关闭sink提供的io.write
 	if err := sink.Close(); err != nil {
 		return "", fmt.Errorf("failed to close snapshot: %v", err)
 	}

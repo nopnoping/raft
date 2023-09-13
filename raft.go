@@ -312,12 +312,16 @@ func (r *Raft) liveBootstrap(configuration Configuration) error {
 }
 
 // runCandidate runs the main loop while in the candidate state.
+// lyf: candidate的主流程
 func (r *Raft) runCandidate() {
+	// lyf: 这里仅仅是用来打印debug信息
 	term := r.getCurrentTerm() + 1
 	r.logger.Info("entering candidate state", "node", r, "term", term)
 	metrics.IncrCounter([]string{"raft", "state", "candidate"}, 1)
 
 	// Start vote for us, and set a timeout
+	// lyf: 给所有server发起投票请求，并获得所有投票channel
+	// lyf: electSelf会修改term
 	voteCh := r.electSelf()
 
 	// Make sure the leadership transfer flag is reset after each run. Having this
@@ -325,12 +329,15 @@ func (r *Raft) runCandidate() {
 	// which will make other servers vote even though they have a leader already.
 	// It is important to reset that flag, because this priviledge could be abused
 	// otherwise.
+	// lyf: candidateFromLeadershipTransfer该变量为true时，对于那些有已知的leader的follower才会投票
 	defer func() { r.candidateFromLeadershipTransfer = false }()
 
+	// lyf: 获取选举超时
 	electionTimeout := r.config().ElectionTimeout
 	electionTimer := randomTimeout(electionTimeout)
 
 	// Tally the votes, need a simple majority
+	// lyf: 投票数，和多数节点数
 	grantedVotes := 0
 	votesNeeded := r.quorumSize()
 	r.logger.Debug("calculated votes needed", "needed", votesNeeded, "term", term)
@@ -339,13 +346,16 @@ func (r *Raft) runCandidate() {
 		r.mainThreadSaturation.sleeping()
 
 		select {
+		// lyf: 处理rpc请求
 		case rpc := <-r.rpcCh:
 			r.mainThreadSaturation.working()
 			r.processRPC(rpc)
 
+		// lyf: 投票结果
 		case vote := <-voteCh:
 			r.mainThreadSaturation.working()
 			// Check if the term is greater than ours, bail
+			// lyf: term大于当前term，退回follower
 			if vote.Term > r.getCurrentTerm() {
 				r.logger.Debug("newer term discovered, fallback to follower", "term", vote.Term)
 				r.setState(Follower)
@@ -354,12 +364,14 @@ func (r *Raft) runCandidate() {
 			}
 
 			// Check if the vote is granted
+			// lyf: 增加投票数
 			if vote.Granted {
 				grantedVotes++
 				r.logger.Debug("vote granted", "from", vote.voterID, "term", vote.Term, "tally", grantedVotes)
 			}
 
 			// Check if we've become the leader
+			// lyf: 大于多数节点，成为leader
 			if grantedVotes >= votesNeeded {
 				r.logger.Info("election won", "term", vote.Term, "tally", grantedVotes)
 				r.setState(Leader)
@@ -410,6 +422,7 @@ func (r *Raft) runCandidate() {
 				electionTimer = randomTimeout(electionTimeout)
 			}
 
+		// lyf: 选举超时，直接重新选取
 		case <-electionTimer:
 			r.mainThreadSaturation.working()
 			// Election failed! Restart the election. We simply return,
@@ -1480,7 +1493,7 @@ func (r *Raft) appendEntries(rpc RPC, a *AppendEntriesRequest) {
 	}
 
 	// Save the current leader
-	// lyf: 存储leader的地址；else这个是为了兼容？·
+	// lyf: 存储leader的地址；else这个是为了兼容？
 	if len(a.Addr) > 0 {
 		r.setLeader(r.trans.DecodePeer(a.Addr), ServerID(a.ID))
 	} else {
@@ -1686,6 +1699,7 @@ func (r *Raft) requestVote(rpc RPC, req *RequestVoteRequest) {
 	}
 	// lyf: 校验当前是否有leader
 	// lyf: 有趣的是，如果当前有，并且不是candidate，那么就要看这个请求是否是因为leaderShipTransfer引起的
+	// lyf: 这个地方对很多场景做了优化！！
 	if leaderAddr, leaderID := r.LeaderWithID(); leaderAddr != "" && leaderAddr != candidate && !req.LeadershipTransfer {
 		r.logger.Warn("rejecting vote request since we have a leader",
 			"from", candidate,
@@ -1960,14 +1974,18 @@ type voteResult struct {
 // ourself. This has the side affecting of incrementing the current term. The
 // response channel returned is used to wait for all the responses (including a
 // vote for ourself). This must only be called from the main thread.
+// lyf: 给所有server发起投票请求，并返回结果channel
 func (r *Raft) electSelf() <-chan *voteResult {
 	// Create a response channel
+	// lyf: 构造结果channel
 	respCh := make(chan *voteResult, len(r.configurations.latest.Servers))
 
 	// Increment the term
+	// lyf: 增加term
 	r.setCurrentTerm(r.getCurrentTerm() + 1)
 
 	// Construct the request
+	// lyf: 构造appendEntries的请求
 	lastIdx, lastTerm := r.getLastEntry()
 	req := &RequestVoteRequest{
 		RPCHeader: r.getRPCHeader(),
@@ -1981,6 +1999,8 @@ func (r *Raft) electSelf() <-chan *voteResult {
 
 	// Construct a function to ask for a vote
 	askPeer := func(peer Server) {
+		// lyf: 启动一个线程，发起请求，并将结果放入channel中
+		// lyf: 这里同样是使用raft的goFunc启动的线程
 		r.goFunc(func() {
 			defer metrics.MeasureSince([]string{"raft", "candidate", "electSelf"}, time.Now())
 			resp := &voteResult{voterID: peer.ID}
@@ -1999,15 +2019,19 @@ func (r *Raft) electSelf() <-chan *voteResult {
 
 	// For each peer, request a vote
 	for _, server := range r.configurations.latest.Servers {
+		// lyf: 该server是否可以投票
 		if server.Suffrage == Voter {
+			// lyf: 给自己投票
 			if server.ID == r.localID {
 				r.logger.Debug("voting for self", "term", req.Term, "id", r.localID)
 				// Persist a vote for ourselves
+				// lyf: 持久化投票决定
 				if err := r.persistVote(req.Term, req.RPCHeader.Addr); err != nil {
 					r.logger.Error("failed to persist vote", "error", err)
 					return nil
 				}
 				// Include our own vote
+				// lyf: 把自己的投票结果发到channel中
 				respCh <- &voteResult{
 					RequestVoteResponse: RequestVoteResponse{
 						RPCHeader: r.getRPCHeader(),
@@ -2018,6 +2042,7 @@ func (r *Raft) electSelf() <-chan *voteResult {
 				}
 			} else {
 				r.logger.Debug("asking for vote", "term", req.Term, "from", server.ID, "address", server.Address)
+				// lyf: 给每个server发送请求
 				askPeer(server)
 			}
 		}
@@ -2106,6 +2131,7 @@ func (r *Raft) initiateLeadershipTransfer(id *ServerID, address *ServerAddress) 
 }
 
 // timeoutNow is what happens when a server receives a TimeoutNowRequest.
+// lyf: 让该节点立刻timeout，成为Candidate
 func (r *Raft) timeoutNow(rpc RPC, req *TimeoutNowRequest) {
 	r.setLeader("", "")
 	r.setState(Candidate)

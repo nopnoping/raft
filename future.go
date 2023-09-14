@@ -146,6 +146,7 @@ func (d *deferError) respond(err error) {
 // There are several types of requests that cause a configuration entry to
 // be appended to the log. These are encoded here for leaderLoop() to process.
 // This is internal to a single server.
+// lyf: 配置变更future
 type configurationChangeFuture struct {
 	logFuture
 	req configurationChangeRequest

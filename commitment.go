@@ -55,6 +55,7 @@ func newCommitment(commitCh chan struct{}, configuration Configuration, startInd
 // Called when a new cluster membership configuration is created: it will be
 // used to determine commitment from now on. 'configuration' is the servers in
 // the cluster.
+// lyf: 根据配置信息，重新构建commitment的match信息
 func (c *commitment) setConfiguration(configuration Configuration) {
 	c.Lock()
 	defer c.Unlock()

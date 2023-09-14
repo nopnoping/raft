@@ -152,7 +152,7 @@ func (s *followerReplication) setLastContact() {
 
 // replicate is a long running routine that replicates log entries to a single
 // follower.
-// lyf: 该文件是同步文件，但是实现的确实raft结构体的方法；同一个包下，任何地方都可以去实现结构体的方法
+// lyf: 该文件是同步文件，但是实现的确是raft结构体的方法；同一个包下，任何地方都可以去实现结构体的方法
 // lyf: 这样可以更好的将处理同一领域的方法，放在一起？
 // lyf: 启动同步
 func (r *Raft) replicate(s *followerReplication) {
@@ -178,6 +178,7 @@ RPC:
 			return
 		// lyf: 这个是提供的哪个场景？
 		// lyf: 看上去就是用来触发是否需要停止
+		// lyf: 提供一个future功能，来监控是否同步成功
 		case deferErr := <-s.triggerDeferErrorCh:
 			lastLogIdx, _ := r.getLastLog()
 			shouldStop = r.replicateTo(s, lastLogIdx)

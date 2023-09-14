@@ -449,6 +449,7 @@ func (r *Raft) getLeadershipTransferInProgress() bool {
 	return v == 1
 }
 
+// lyf: 初始化leaderState
 func (r *Raft) setupLeaderState() {
 	r.leaderState.commitCh = make(chan struct{}, 1)
 	r.leaderState.commitment = newCommitment(r.leaderState.commitCh,
@@ -462,19 +463,23 @@ func (r *Raft) setupLeaderState() {
 
 // runLeader runs the main loop while in leader state. Do the setup here and drop into
 // the leaderLoop for the hot loop.
+// lyf: leader的主流程
 func (r *Raft) runLeader() {
 	r.logger.Info("entering leader state", "leader", r)
 	metrics.IncrCounter([]string{"raft", "state", "leader"}, 1)
 
 	// Notify that we are the leader
+	// lyf: 提示一下，当前节点是leader
 	overrideNotifyBool(r.leaderCh, true)
 
 	// Store the notify chan. It's not reloadable so shouldn't change before the
 	// defer below runs, but this makes sure we always notify the same chan if
 	// ever for both gaining and loosing leadership.
+	// lyf: 获取配置中的notifyCh
 	notify := r.config().NotifyCh
 
 	// Push to the notify channel if given
+	// lyf: 通知当前leader已经改变
 	if notify != nil {
 		select {
 		case notify <- true:
@@ -484,14 +489,19 @@ func (r *Raft) runLeader() {
 
 	// setup leader state. This is only supposed to be accessed within the
 	// leaderloop.
+	// lyf: 初始化leaderState
 	r.setupLeaderState()
 
 	// Run a background go-routine to emit metrics on log age
+	// lyf: 启动一个线程，用来emit metrics
+	// lyf: 为什么不用raft的go Func
 	stopCh := make(chan struct{})
 	go emitLogStoreMetrics(r.logs, []string{"raft", "leader"}, oldestLogGaugeInterval, stopCh)
 
 	// Cleanup state on step down
+	// lyf: leader结束的时候，需要执行的清除环节
 	defer func() {
+		// lyf: 关闭stopCh，这样emit metrics的线程就会停止吗？
 		close(stopCh)
 
 		// Since we were the leader previously, we update our
@@ -499,24 +509,30 @@ func (r *Raft) runLeader() {
 		// reporting a last contact time from before we were the
 		// leader. Otherwise, to a client it would seem our data
 		// is extremely stale.
+		// lyf: 更新下最近的联系时间
+		// lyf: 从leader step down后，如果不更新，可能会认为超时，进入candidate
 		r.setLastContact()
 
 		// Stop replication
+		// lyf: 告诉同步线程，同步结束
 		for _, p := range r.leaderState.replState {
 			close(p.stopCh)
 		}
 
 		// Respond to all inflight operations
+		// lyf: 还没有执行的log，返回leadership改变结果
 		for e := r.leaderState.inflight.Front(); e != nil; e = e.Next() {
 			e.Value.(*logFuture).respond(ErrLeadershipLost)
 		}
 
 		// Respond to any pending verify requests
+		// lyf: 对验证leader关系的future，回复结果
 		for future := range r.leaderState.notify {
 			future.respond(ErrLeadershipLost)
 		}
 
 		// Clear all the state
+		// lyf: 清除leaderState
 		r.leaderState.commitCh = nil
 		r.leaderState.commitment = nil
 		r.leaderState.inflight = nil
@@ -527,6 +543,8 @@ func (r *Raft) runLeader() {
 		// If we are stepping down for some reason, no known leader.
 		// We may have stepped down due to an RPC call, which would
 		// provide the leader, so we cannot always blank this out.
+		// lyf: 当step down时，会有很多原因，有些是有新的leader了，而有些是发送了错误
+		// lyf: 如果是发送了错误，需要清空我们记录的leader地址
 		r.leaderLock.Lock()
 		if r.leaderAddr == r.localAddr && r.leaderID == r.localID {
 			r.leaderAddr = ""
@@ -535,9 +553,11 @@ func (r *Raft) runLeader() {
 		r.leaderLock.Unlock()
 
 		// Notify that we are not the leader
+		// lyf: 修改leaderCh为false
 		overrideNotifyBool(r.leaderCh, false)
 
 		// Push to the notify channel if given
+		// lyf: 告诉配置notify，当前不是leader
 		if notify != nil {
 			select {
 			case notify <- false:
@@ -552,6 +572,7 @@ func (r *Raft) runLeader() {
 	}()
 
 	// Start a replication routine for each peer
+	// lyf: 启动同步线程
 	r.startStopReplication()
 
 	// Dispatch a no-op log entry first. This gets this leader up to the latest
@@ -560,10 +581,12 @@ func (r *Raft) runLeader() {
 	// an unbounded number of uncommitted configurations in the log. We now
 	// maintain that there exists at most one uncommitted configuration entry in
 	// any log, so we have to do proper no-ops here.
+	// lyf: 添加一个noop log
 	noop := &logFuture{log: Log{Type: LogNoop}}
 	r.dispatchLogs([]*logFuture{noop})
 
 	// Sit in the leader loop until we step down
+	// lyf: leader主循环
 	r.leaderLoop()
 }
 
@@ -571,11 +594,16 @@ func (r *Raft) runLeader() {
 // new peers, and stop replication to removed peers. Before removing a peer,
 // it'll instruct the replication routines to try to replicate to the current
 // index. This must only be called from the main thread.
+// lyf: 启动同步线程
+// lyf: 对于不在配置中的，会移除；兼容配置变更
 func (r *Raft) startStopReplication() {
+	// lyf: 记录在配置中的peers
 	inConfig := make(map[ServerID]bool, len(r.configurations.latest.Servers))
 	lastIdx := r.getLastIndex()
 
 	// Start replication goroutines that need starting
+	// lyf: 启动那些需要启动的同步线程
+	// lyf: 有些之前已经启动过了，就不需要启动
 	for _, server := range r.configurations.latest.Servers {
 		if server.ID == r.localID {
 			continue
@@ -583,7 +611,9 @@ func (r *Raft) startStopReplication() {
 
 		inConfig[server.ID] = true
 
+		// lyf: 看是否已经启动了
 		s, ok := r.leaderState.replState[server.ID]
+		// lyf: 没有启动，则启动一下
 		if !ok {
 			r.logger.Info("added peer, starting replication", "peer", server.ID)
 			s = &followerReplication{
@@ -604,6 +634,7 @@ func (r *Raft) startStopReplication() {
 			// lyf: 使用raftState来启动协程；这样结束的时候，可以等待所有子流程结束后，主流程再结束
 			// lyf: 启动每个follower对应的同步线程
 			r.goFunc(func() { r.replicate(s) })
+			// lyf: 触发一次同步
 			asyncNotifyCh(s.triggerCh)
 			r.observe(PeerObservation{Peer: server, Removed: false})
 		} else if ok {
@@ -612,6 +643,7 @@ func (r *Raft) startStopReplication() {
 			peer := s.peer
 			s.peerLock.RUnlock()
 
+			// lyf: 已经启动过了，则看地址是否发送变化
 			if peer.Address != server.Address {
 				r.logger.Info("updating peer", "peer", server.ID)
 				s.peerLock.Lock()
@@ -622,14 +654,18 @@ func (r *Raft) startStopReplication() {
 	}
 
 	// Stop replication goroutines that need stopping
+	// lyf: 配置发送变更后，将那些不在配置中的peer同步移除
 	for serverID, repl := range r.leaderState.replState {
 		if inConfig[serverID] {
 			continue
 		}
 		// Replicate up to lastIdx and stop
 		r.logger.Info("removed peer, stopping replication", "peer", serverID, "last-index", lastIdx)
+		// lyf: 最后尝试一下同步
 		repl.stopCh <- lastIdx
+		// lyf: 关闭stopCh
 		close(repl.stopCh)
+		// lyf: 删除
 		delete(r.leaderState.replState, serverID)
 		r.observe(PeerObservation{Peer: repl.peer, Removed: true})
 	}
@@ -658,6 +694,7 @@ func (r *Raft) configurationChangeChIfStable() chan *configurationChangeFuture {
 
 // leaderLoop is the hot loop for a leader. It is invoked
 // after all the various leader setup is done.
+// lyf: leader的主流程
 func (r *Raft) leaderLoop() {
 	// stepDown is used to track if there is an inflight log that
 	// would cause us to lose leadership (specifically a RemovePeer of
@@ -665,25 +702,31 @@ func (r *Raft) leaderLoop() {
 	// be processed in parallel, otherwise we are basing commit on
 	// only a single peer (ourself) and replicating to an undefined set
 	// of peers.
+	// lyf: stepDown是用来标记inflight引起的角色变更？
 	stepDown := false
 	// This is only used for the first lease check, we reload lease below
 	// based on the current config value.
+	// lyf: 租借时间，允许多长时间没有和半数节点保持联系
 	lease := time.After(r.config().LeaderLeaseTimeout)
 
 	for r.getState() == Leader {
 		r.mainThreadSaturation.sleeping()
 
 		select {
+		// lyf: rpc处理
 		case rpc := <-r.rpcCh:
 			r.mainThreadSaturation.working()
 			r.processRPC(rpc)
 
+		// lyf: leaderState中的stepDown，变为follower
 		case <-r.leaderState.stepDown:
 			r.mainThreadSaturation.working()
 			r.setState(Follower)
 
+		// lyf: 关系变更; 实现关系变更api
 		case future := <-r.leadershipTransferCh:
 			r.mainThreadSaturation.working()
+			// lyf: 看是不是已经在关系变更中
 			if r.getLeadershipTransferInProgress() {
 				r.logger.Debug(ErrLeadershipTransferInProgress.Error())
 				future.respond(ErrLeadershipTransferInProgress)
@@ -694,6 +737,7 @@ func (r *Raft) leaderLoop() {
 
 			// When we are leaving leaderLoop, we are no longer
 			// leader, so we should stop transferring.
+			// lyf: 当不再是leader时，会关闭该channel，因此会通知监控，当前不是leader
 			leftLeaderLoop := make(chan struct{})
 			defer func() { close(leftLeaderLoop) }()
 
@@ -716,21 +760,25 @@ func (r *Raft) leaderLoop() {
 			// It may be safe to modify things such that setLeadershipTransferInProgress
 			// is set to false before calling future.Respond, but that still needs
 			// to be tested and this situation mirrors what callers already had to deal with.
+			// lyf: 监控leader关系变更操作的结果，并回复
 			go func() {
 				defer r.setLeadershipTransferInProgress(false)
 				select {
+				// lyf: 超时
 				case <-time.After(r.config().ElectionTimeout):
 					close(stopCh)
 					err := fmt.Errorf("leadership transfer timeout")
 					r.logger.Debug(err.Error())
 					future.respond(err)
 					<-doneCh
+				// lyf: 丢失？
 				case <-leftLeaderLoop:
 					close(stopCh)
 					err := fmt.Errorf("lost leadership during transfer (expected)")
 					r.logger.Debug(err.Error())
 					future.respond(nil)
 					<-doneCh
+				// lyf: 结束
 				case err := <-doneCh:
 					if err != nil {
 						r.logger.Debug(err.Error())
@@ -743,6 +791,7 @@ func (r *Raft) leaderLoop() {
 			// starting leadership transfer asynchronously because
 			// leaderState is only supposed to be accessed in the
 			// leaderloop.
+			// lyf: 看future中是否指定了server
 			id := future.ID
 			address := future.Address
 			if id == nil {
@@ -761,6 +810,7 @@ func (r *Raft) leaderLoop() {
 				continue
 			}
 			r.setLeadershipTransferInProgress(true)
+			// lyf: 调用leadershipTransfer
 			go r.leadershipTransfer(*id, *address, state, stopCh, doneCh)
 
 		// lyf: 有新的log commit
@@ -776,6 +826,7 @@ func (r *Raft) leaderLoop() {
 			// value.
 			// lyf: 配置？？
 			// lyf: 配置信息也是记录在log中的？因此如果提交的log是配置信息的话，就需要去更新已提交的commit
+			// lyf: 是的，配置变更信息是记录在log中的
 			if r.configurations.latestIndex > oldCommitIndex &&
 				r.configurations.latestIndex <= commitIndex {
 				r.setCommittedConfiguration(r.configurations.latest, r.configurations.latestIndex)
@@ -787,7 +838,7 @@ func (r *Raft) leaderLoop() {
 			start := time.Now()
 			// lyf: 记录inflight中，已经提交的log
 			var groupReady []*list.Element
-			// lyf: ready log对呀的log future
+			// lyf: ready log对应的log future
 			groupFutures := make(map[uint64]*logFuture)
 			// lyf: 记录groupReady中最大的idx
 			var lastIdxInGroup uint64
@@ -835,6 +886,7 @@ func (r *Raft) leaderLoop() {
 				}
 			}
 
+		// lyf: 验证当前还是不是leader
 		case v := <-r.verifyCh:
 			r.mainThreadSaturation.working()
 			if v.quorumSize == 0 {
@@ -864,6 +916,7 @@ func (r *Raft) leaderLoop() {
 				v.respond(nil)
 			}
 
+		// lyf: restore snapshot
 		case future := <-r.userRestoreCh:
 			r.mainThreadSaturation.working()
 			if r.getLeadershipTransferInProgress() {
@@ -874,6 +927,7 @@ func (r *Raft) leaderLoop() {
 			err := r.restoreUserSnapshot(future.meta, future.reader)
 			future.respond(err)
 
+		// lyf: 获取当前的配置
 		case future := <-r.configurationsCh:
 			r.mainThreadSaturation.working()
 			if r.getLeadershipTransferInProgress() {
@@ -884,6 +938,7 @@ func (r *Raft) leaderLoop() {
 			future.configurations = r.configurations.Clone()
 			future.respond(nil)
 
+		// lyf: 配置变更
 		case future := <-r.configurationChangeChIfStable():
 			r.mainThreadSaturation.working()
 			if r.getLeadershipTransferInProgress() {
@@ -893,6 +948,7 @@ func (r *Raft) leaderLoop() {
 			}
 			r.appendConfigurationEntry(future)
 
+		// lyf: 只有follower需要启动
 		case b := <-r.bootstrapCh:
 			r.mainThreadSaturation.working()
 			b.respond(ErrCantBootstrap)
@@ -931,13 +987,17 @@ func (r *Raft) leaderLoop() {
 				r.dispatchLogs(ready)
 			}
 
+		// lyf: 看下和半数节点的联系时间，是否超时
 		case <-lease:
 			r.mainThreadSaturation.working()
 			// Check if we've exceeded the lease, potentially stepping down
+			// lyf: 检查我们是不是满足规定时间内，联系多数节点，并返回最长的diff
 			maxDiff := r.checkLeaderLease()
 
 			// Next check interval should adjust for the last node we've
 			// contacted, without going negative
+			// lyf: 计算下一次的lease时间
+			// lyf: 该优化可以更快的去判断这次最长没有联系的server，是否能在LeaderLeaseTimeout内再次联系
 			checkInterval := r.config().LeaderLeaseTimeout - maxDiff
 			if checkInterval < minCheckInterval {
 				checkInterval = minCheckInterval
@@ -946,6 +1006,7 @@ func (r *Raft) leaderLoop() {
 			// Renew the lease timer
 			lease = time.After(checkInterval)
 
+		// lyf: 可以强制发起心跳
 		case <-r.leaderNotifyCh:
 			for _, repl := range r.leaderState.replState {
 				asyncNotifyCh(repl.notifyCh)
@@ -991,8 +1052,10 @@ func (r *Raft) verifyLeader(v *verifyFuture) {
 }
 
 // leadershipTransfer is doing the heavy lifting for the leadership transfer.
+// lyf: leader的关系变更
 func (r *Raft) leadershipTransfer(id ServerID, address ServerAddress, repl *followerReplication, stopCh chan struct{}, doneCh chan error) {
 	// make sure we are not already stopped
+	// lyf: 确定当前没有停止
 	select {
 	case <-stopCh:
 		doneCh <- nil
@@ -1000,6 +1063,7 @@ func (r *Raft) leadershipTransfer(id ServerID, address ServerAddress, repl *foll
 	default:
 	}
 
+	// lyf: 同步到最新log
 	for atomic.LoadUint64(&repl.nextIndex) <= r.getLastIndex() {
 		err := &deferError{}
 		err.init()
@@ -1026,6 +1090,7 @@ func (r *Raft) leadershipTransfer(id ServerID, address ServerAddress, repl *foll
 	// heartbeats are still coming in.
 
 	// Step 3: send TimeoutNow message to target server.
+	// lyf: 发送timeoutNow给目标server
 	err := r.trans.TimeoutNow(id, address, &TimeoutNowRequest{RPCHeader: r.getRPCHeader()}, &TimeoutNowResponse{})
 	if err != nil {
 		err = fmt.Errorf("failed to make TimeoutNow RPC to %v: %v", id, err)
@@ -1037,8 +1102,11 @@ func (r *Raft) leadershipTransfer(id ServerID, address ServerAddress, repl *foll
 // within the last leader lease interval. If not, we need to step down,
 // as we may have lost connectivity. Returns the maximum duration without
 // contact. This must only be called from the main thread.
+// lyf: 检查我们是否能在规定的时间间隔内，联系大多数节点
+// lyf: 返回满足规定时间间隔的最大时间
 func (r *Raft) checkLeaderLease() time.Duration {
 	// Track contacted nodes, we can always contact ourself
+	// lyf: 记录联系的个数
 	contacted := 0
 
 	// Store lease timeout for this one check invocation as we need to refer to it
@@ -1051,14 +1119,18 @@ func (r *Raft) checkLeaderLease() time.Duration {
 	now := time.Now()
 	for _, server := range r.configurations.latest.Servers {
 		if server.Suffrage == Voter {
+			// lyf: 自己，必然联系
 			if server.ID == r.localID {
 				contacted++
 				continue
 			}
+			// lyf: 获取和server的联系时间差
 			f := r.leaderState.replState[server.ID]
 			diff := now.Sub(f.LastContact())
+			// lyf: 没有超过时间间隔
 			if diff <= leaseTimeout {
 				contacted++
+				// lyf: 记录最大的diff
 				if diff > maxDiff {
 					maxDiff = diff
 				}
@@ -1076,6 +1148,7 @@ func (r *Raft) checkLeaderLease() time.Duration {
 
 	// Verify we can contact a quorum
 	quorum := r.quorumSize()
+	// lyf: 联系的数量没有达到半数，变为follower
 	if contacted < quorum {
 		r.logger.Warn("failed to contact quorum of nodes, stepping down")
 		r.setState(Follower)
@@ -1204,7 +1277,9 @@ func (r *Raft) restoreUserSnapshot(meta *SnapshotMeta, reader io.Reader) error {
 // appendConfigurationEntry changes the configuration and adds a new
 // configuration entry to the log. This must only be called from the
 // main thread.
+// lyf: 改变配置，并添加到log中
 func (r *Raft) appendConfigurationEntry(future *configurationChangeFuture) {
+	// lyf: 获取新的配置
 	configuration, err := nextConfiguration(r.configurations.latest, r.configurations.latestIndex, future.req)
 	if err != nil {
 		future.respond(err)
@@ -1224,6 +1299,7 @@ func (r *Raft) appendConfigurationEntry(future *configurationChangeFuture) {
 	// similarly on old Raft servers, but remove peer does extra checks to
 	// see if a leader needs to step down. Since they both assert the full
 	// configuration, then we can safely call remove peer for everything.
+	// lyf: 不同配置的类型和数据的加密不同
 	if r.protocolVersion < 2 {
 		future.log = Log{
 			Type: LogRemovePeerDeprecated,
@@ -1236,10 +1312,14 @@ func (r *Raft) appendConfigurationEntry(future *configurationChangeFuture) {
 		}
 	}
 
+	// lyf: 将该日志dispatch
 	r.dispatchLogs([]*logFuture{&future.logFuture})
 	index := future.Index()
+	// lyf: 更新最新的配置
 	r.setLatestConfiguration(configuration, index)
+	// lyf: 重新构建commitment的match信息
 	r.leaderState.commitment.setConfiguration(configuration)
+	// lyf: 看是不是有需要启动或停止的同步
 	r.startStopReplication()
 }
 
@@ -2085,6 +2165,7 @@ func (r *Raft) setState(state RaftState) {
 
 // pickServer returns the follower that is most up to date and participating in quorum.
 // Because it accesses leaderstate, it should only be called from the leaderloop.
+// lyf: 获取同步状态最新的follower
 func (r *Raft) pickServer() *Server {
 	var pick *Server
 	var current uint64

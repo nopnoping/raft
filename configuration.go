@@ -133,6 +133,7 @@ func (c ConfigurationChangeCommand) String() string {
 // configurationChangeRequest describes a change that a leader would like to
 // make to its current configuration. It's used only within a single server
 // (never serialized into the log), as part of `configurationChangeFuture`.
+// lyf: configuration改变请求参数
 type configurationChangeRequest struct {
 	command       ConfigurationChangeCommand
 	serverID      ServerID
@@ -238,12 +239,15 @@ func checkConfiguration(configuration Configuration) error {
 // nextConfiguration generates a new Configuration from the current one and a
 // configuration change request. It's split from appendConfigurationEntry so
 // that it can be unit tested easily.
+// lyf: 生成新的configuration
 func nextConfiguration(current Configuration, currentIndex uint64, change configurationChangeRequest) (Configuration, error) {
+	// lyf: 验证prevIndex
 	if change.prevIndex > 0 && change.prevIndex != currentIndex {
 		return Configuration{}, fmt.Errorf("configuration changed since %v (latest is %v)", change.prevIndex, currentIndex)
 	}
 
 	configuration := current.Clone()
+	// lyf: 根据不同的change，更改配置
 	switch change.command {
 	case AddVoter:
 		newServer := Server{
